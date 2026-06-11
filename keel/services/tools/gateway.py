@@ -17,6 +17,7 @@ from ...substrate.events import EventType
 from ...executor.engine import RunContext
 from ...kir.schemas_registry import resolve_schema
 from .contract import RegisteredTool, ToolDenied
+from .sandbox import Sandbox, SandboxViolation
 
 
 class _RateLimiter:
@@ -36,9 +37,11 @@ class _RateLimiter:
 
 
 class ToolGateway:
-    def __init__(self, tools: dict[str, RegisteredTool]) -> None:
+    def __init__(self, tools: dict[str, RegisteredTool],
+                 sandbox: "Sandbox | None" = None) -> None:
         self._tools = tools
         self._rl = _RateLimiter()
+        self._sandbox = sandbox
 
     def names(self) -> list[str]:
         return sorted(self._tools)
@@ -71,11 +74,19 @@ class ToolGateway:
                        data={"tool": tool_name, "side_effect": c.side_effect.value,
                              "agent": agent_id})
         try:
-            raw_result = await asyncio.wait_for(
-                self._run_impl(tool, validated_in), timeout=c.timeout_s)
+            if c.module and self._sandbox is not None:
+                # Out-of-process under capability gating (the sandbox enforces its own
+                # timeout); undeclared fs/network access is blocked there.
+                raw_result = await self._sandbox.run(c.module, validated_in, c)
+            else:
+                raw_result = await asyncio.wait_for(
+                    self._run_impl(tool, validated_in), timeout=c.timeout_s)
         except asyncio.TimeoutError as e:
             await self._deny(ctx, tool_name, "timeout")
             raise ToolDenied(tool_name, "timeout") from e
+        except SandboxViolation as e:
+            await self._deny(ctx, tool_name, "sandbox_violation", {"detail": str(e)})
+            raise ToolDenied(tool_name, "sandbox_violation", str(e)) from e
 
         out_bytes = json.dumps(raw_result, sort_keys=True).encode()
         if len(out_bytes) > c.max_output_bytes:
