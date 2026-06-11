@@ -8,6 +8,7 @@ from ...kir.schema import Node
 from ...kir.schemas_registry import resolve_schema
 from .port import ModelPort, ModelRequest, ModelResponse, ModelError
 from .pricing import PriceTable
+from ..context import ContextCompiler, CompiledContext
 
 MAX_REPROMPTS = 2
 
@@ -41,19 +42,22 @@ def port_completer(port: ModelPort) -> Completer:
     return _complete
 
 
-def _assemble_prompt(node: Node, inputs: dict[str, bytes]) -> list[dict[str, str]]:
-    """Phase-1 prompt assembly. Phase 3 (P3-4) replaces this with the measured,
-    staged context compiler. Kept deterministic so golden tests are stable."""
+def _compile_context(node: Node, inputs: dict[str, bytes],
+                     compiler: "ContextCompiler") -> CompiledContext:
+    """Staged, measured prompt assembly (P3-4). Upstream outputs and optional
+    history/memory carried in node.config are compiled into messages with a
+    per-stage token breakdown."""
     upstream = {k: v.decode("utf-8", errors="replace") for k, v in sorted(inputs.items())}
-    system = node.config.get("system")
-    messages: list[dict[str, str]] = []
-    if isinstance(system, str) and system:
-        messages.append({"role": "system", "content": system})
-    user = str(node.config.get("prompt", ""))
-    if upstream:
-        user = f"{user}\n\nInputs:\n{json.dumps(upstream, sort_keys=True)}"
-    messages.append({"role": "user", "content": user})
-    return messages
+    history = node.config.get("history") or []
+    memory = node.config.get("memory") or []
+    return compiler.compile(
+        system=str(node.config.get("system", "")),
+        role=str(node.config.get("role", "")),
+        prompt=str(node.config.get("prompt", "")),
+        inputs=json.dumps(upstream, sort_keys=True) if upstream else "",
+        history=history if isinstance(history, list) else [],
+        memory=memory if isinstance(memory, list) else [],
+    )
 
 
 def make_llm_handler(
@@ -61,6 +65,7 @@ def make_llm_handler(
     price_per_1k: Optional[tuple[float, float]] = None,
     *,
     price_table: Optional[PriceTable] = None,
+    compiler: Optional[ContextCompiler] = None,
 ) -> NodeHandler:
     """Build a handler for ``llm_step`` nodes.
 
@@ -68,15 +73,18 @@ def make_llm_handler(
     attached (invariant #1), and — when the node declares ``output_schema`` —
     enforces it with a bounded re-prompt loop that feeds the validator's own error
     back to the model. The step ends in typed success or a typed failure event;
-    malformed output never reaches a downstream node (P1-7).
+    malformed output never reaches a downstream node (P1-7). The prompt is built by
+    the staged, measured context compiler (P3-4).
     """
     completer: Completer = port_completer(model) if isinstance(model, ModelPort) else model
     table = price_table or (
         _FlatTable(price_per_1k) if price_per_1k is not None else PriceTable()
     )
+    cc = compiler or ContextCompiler()
 
     async def handle(ctx: RunContext, node: Node, inputs: dict[str, bytes]) -> bytes:
-        base_messages = _assemble_prompt(node, inputs)
+        compiled = _compile_context(node, inputs, cc)
+        base_messages = compiled.messages
         schema_model = resolve_schema(node.output_schema)
         req = ModelRequest(
             model=str(node.config.get("model", "mock:test")),
@@ -91,7 +99,9 @@ def make_llm_handler(
             await ctx.emit(
                 EventType.LLM_REQUEST, node_id=node.id,
                 payload=json.dumps(req.messages).encode(),
-                data={"model": req.model, "reprompt": attempt},
+                data={"model": req.model, "reprompt": attempt,
+                      "context_tokens": compiled.stage_tokens,
+                      "context_total": compiled.total_tokens},
             )
             # escalate=attempt: each schema failure climbs the policy's candidate
             # ladder (when the policy escalates on validation_failure).
