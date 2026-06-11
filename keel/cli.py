@@ -278,6 +278,22 @@ async def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import(args: argparse.Namespace) -> int:
+    if args.framework != "crewai":
+        _die("only 'crewai' import is supported")
+    from .authoring.import_crewai import load_crewai_dir, load_yaml_pair, unconverted
+    crew = load_crewai_dir(args.path, graph_id=args.graph_id)
+    graph = crew.compile()
+    agents, tasks = load_yaml_pair(args.path)
+    notes = unconverted(agents, tasks)
+    out = Path(args.out or f"{graph.graph_id}.kir.json")
+    out.write_text(graph.model_dump_json(indent=2))
+    print(f"imported {len(graph.nodes)} nodes -> {out}")
+    for n in notes:
+        print(f"  [unconverted] {n}", file=sys.stderr)
+    return 0
+
+
 def cmd_view(args: argparse.Namespace) -> int:
     try:
         from .viewer.app import serve
@@ -391,6 +407,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_aud.add_argument("--out", default=None)
     _add_store_args(p_aud)
     p_aud.set_defaults(func=cmd_audit, _async=True)
+
+    p_imp = sub.add_parser("import", help="import another framework's project to KIR")
+    p_imp.add_argument("framework", choices=["crewai"])
+    p_imp.add_argument("path", help="dir with agents.yaml + tasks.yaml")
+    p_imp.add_argument("--graph-id", dest="graph_id", default=None)
+    p_imp.add_argument("--out", default=None)
+    p_imp.set_defaults(func=cmd_import, _async=False)
 
     p_view = sub.add_parser("view", help="launch the trace viewer")
     p_view.add_argument("--host", default="127.0.0.1")

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 from ..substrate.events import EventType
-from ..executor.engine import RunContext, FatalError
+from ..executor.engine import RunContext
 
 
 @dataclass(frozen=True)
