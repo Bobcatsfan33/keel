@@ -18,7 +18,7 @@ from ..substrate.store.sqlite import SqliteEventStore
 from ..substrate.store.memory import MemoryEventStore
 from ..substrate.catalog import (RunCatalog, SqliteRunCatalog, MemoryRunCatalog, RunInfo)
 from ..kir.schema import Graph
-from ..executor.engine import Executor, RunContext, StepInterceptor
+from ..executor.engine import Executor, RunContext
 from ..executor.state import RunState
 from .budget import Budget, Budgeter, BudgetInterceptor
 from .model.port import ModelPort

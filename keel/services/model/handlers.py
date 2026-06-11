@@ -3,13 +3,24 @@ import json
 from typing import Awaitable, Optional, AsyncIterator, Protocol
 from pydantic import ValidationError
 from ...substrate.events import EventType, TokenUsage
-from ...executor.engine import RunContext, FatalError, NodeHandler
+from ...executor.engine import RunContext, FatalError, RetryableError, NodeHandler
 from ...kir.schema import Node
 from ...kir.schemas_registry import resolve_schema
-from .port import ModelPort, ModelRequest, ModelResponse
+from .port import ModelPort, ModelRequest, ModelResponse, ModelError
 from .pricing import PriceTable
 
 MAX_REPROMPTS = 2
+
+# Provider taxonomy -> executor taxonomy. Transient classes become RetryableError so
+# the executor's per-node retry/backoff absorbs a rate-limit storm; the rest are fatal
+# (context_length is handled upstream by the context compiler, not retried blindly).
+_RETRYABLE = {"rate_limit", "overloaded", "transient"}
+
+
+def _to_executor_error(e: ModelError) -> Exception:
+    if e.taxonomy in _RETRYABLE:
+        return RetryableError(str(e), taxonomy=e.taxonomy)
+    return FatalError(f"{e.taxonomy}: {e}")
 
 
 class Completer(Protocol):
@@ -84,7 +95,10 @@ def make_llm_handler(
             )
             # escalate=attempt: each schema failure climbs the policy's candidate
             # ladder (when the policy escalates on validation_failure).
-            resp = await completer(ctx, node, req, escalate=attempt)
+            try:
+                resp = await completer(ctx, node, req, escalate=attempt)
+            except ModelError as e:
+                raise _to_executor_error(e) from e
             await ctx.emit(
                 EventType.LLM_RESPONSE, node_id=node.id,
                 payload=resp.text.encode(),
