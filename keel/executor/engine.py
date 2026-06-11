@@ -27,6 +27,14 @@ class GatePaused(Exception):
     can reference it without an import cycle."""
 
 
+@runtime_checkable
+class SpendMeter(Protocol):
+    """Just the chokepoint method the context needs — the L3 Budgeter satisfies it.
+    Keeping this protocol in L2 lets emit meter spend without importing services."""
+
+    def commit_spend(self, node_scope: str, usd: float, tokens: int) -> None: ...
+
+
 class RunContext:
     """One per run. Holds the injected ports so nothing below calls a clock, rng,
     or id generator directly. During replay these are the Replay* variants. The
@@ -34,7 +42,7 @@ class RunContext:
 
     def __init__(self, run_id: str, clock: Clock, ids: IdGen, rng: Rng,
                  blobs: BlobStore, bus: TraceBus, state: RunState,
-                 scope: Optional[str] = None) -> None:
+                 scope: Optional[str] = None, budgeter: Optional["SpendMeter"] = None) -> None:
         self.run_id = run_id
         self.clock = clock
         self.ids = ids
@@ -43,6 +51,10 @@ class RunContext:
         self.bus = bus
         self.state = state
         self.scope = scope or f"run:{run_id}"
+        # The budgeter (a SpendMeter) is metered at the single chokepoint all spend
+        # flows through — this emit — so there is no path (retries, crew regions)
+        # that can spend without being counted. None disables metering.
+        self.budgeter = budgeter
 
     def scope_for(self, node_id: str) -> str:
         return f"{self.scope}/node:{node_id}"
@@ -68,6 +80,12 @@ class RunContext:
         # Fold locally FIRST (advances seq), then persist. A crash in the gap leaves
         # the persisted log gap-free; the un-persisted event is regenerated on resume.
         self.state._apply(ev)
+        # Meter spend at the chokepoint: any event carrying cost/tokens is charged to
+        # its node's scope (and thereby every ancestor scope). Retries and crew-region
+        # spend cannot bypass this because they, too, flow through emit.
+        if self.budgeter is not None and node_id is not None and (cost_usd or tokens):
+            tok = (tokens.input + tokens.output) if tokens is not None else 0
+            self.budgeter.commit_spend(self.scope_for(node_id), cost_usd, tok)
         await self.bus.emit(ev)
         return ev
 

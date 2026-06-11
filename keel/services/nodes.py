@@ -106,19 +106,21 @@ def make_region_handler(handlers: dict[NodeType, NodeHandler]) -> NodeHandler:
         child_run_id = f"{ctx.run_id}::{node.id}"
         child_scope = f"{ctx.scope_for(node.id)}/crew"
 
-        budgeter = Budgeter(ctx.clock)
+        # Share the parent's budgeter so crew-internal spend composes up to the run
+        # and tenant scopes — there is no spend path inside a region that bypasses the
+        # enclosing budget (P3-1 no-bypass). The region's own contract is an extra
+        # KILL budget on the crew scope.
+        budgeter = ctx.budgeter if isinstance(ctx.budgeter, Budgeter) else Budgeter(ctx.clock)
         budgeter.register(child_scope, Budget(
             max_steps=region.max_steps, max_tokens=region.max_tokens,
             action=BudgetAction.KILL))
         interceptor = BudgetInterceptor(budgeter)
 
         child_state = RunState(run_id=child_run_id, graph=subgraph)
-        # Seed the region's source nodes with the crew's inputs by stashing them as a
-        # pre-completed virtual predecessor is overkill here; instead config-injected
-        # prompts in the region read from their own config. The crew inputs are made
-        # available to source nodes via their config "prompt" already.
+        # Region source nodes read their own config-injected prompts; the crew inputs
+        # are already available to them via config.
         child_ctx = RunContext(child_run_id, ctx.clock, ctx.ids, ctx.rng, ctx.blobs,
-                               ctx.bus, child_state, scope=child_scope)
+                               ctx.bus, child_state, scope=child_scope, budgeter=budgeter)
         sub_exec = Executor(MemoryEventStore(), ctx.bus, ctx.blobs, handlers,
                             interceptors=[interceptor])
         final = await sub_exec.run(subgraph, child_ctx)
