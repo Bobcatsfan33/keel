@@ -113,6 +113,7 @@ async function openRun(id) {
       <span class="pill">tokens ${r.total_tokens_in}→${r.total_tokens_out}</span>
       <span class="pill">${r.events.length} events</span>
       <span class="pill">priciest: ${exp}</span>
+      <button onclick="diffWith()">Diff vs…</button>
     </div>
     ${gatePanel(r)}
     <table><thead><tr><th>#</th><th>type</th><th>node</th><th>tok</th><th>cost</th><th>data</th></tr></thead>
@@ -136,6 +137,14 @@ async function decideGate(node, decision) {
   await fetch(`/api/runs/${current}/gates/${node}/${decision}`, {method:'POST'});
   $('#hint').textContent = `${decision}d ${node} — resumes on next worker / keel resume`;
   openRun(current);
+}
+async function diffWith() {
+  const other = prompt('Diff current run against run id:');
+  if (!other) return;
+  const res = await (await fetch(`/api/diff/${current}/${other}`)).json();
+  $('#dtitle').textContent = `diff ${current} vs ${other}`;
+  $('#dbody').textContent = res.lines.join('\n');
+  $('#drawer').classList.add('open');
 }
 
 function fmtData(e) {

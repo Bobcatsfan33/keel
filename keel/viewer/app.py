@@ -92,6 +92,13 @@ def create_app(db_path: str = "keel.db", blob_dir: str = "blobs") -> FastAPI:
         return JSONResponse({"run_id": run_id, "node_id": node_id, "decision": decision,
                              "note": "recorded; resume on next worker poll or `keel resume`"})
 
+    @app.get("/api/diff/{run_a}/{run_b}")
+    async def diff(run_a: str, run_b: str) -> JSONResponse:
+        from ..executor.replay import diff_runs
+        a = [e async for e in app.state.store.read_run(run_a)]
+        b = [e async for e in app.state.store.read_run(run_b)]
+        return JSONResponse({"lines": diff_runs(a, b)})
+
     @app.get("/api/blob/{ref:path}")
     async def get_blob(ref: str) -> PlainTextResponse:
         try:

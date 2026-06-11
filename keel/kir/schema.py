@@ -94,24 +94,26 @@ class Graph(BaseModel):
 
     @staticmethod
     def _assert_acyclic(ids: list[str], edges: list[Edge]) -> None:
+        # Kahn's algorithm — iterative so deep chains (thousands of nodes) don't blow
+        # the Python recursion limit. If any node never reaches in-degree 0, it sits
+        # on (or downstream of) a cycle.
         adj: dict[str, list[str]] = {i: [] for i in ids}
+        indeg: dict[str, int] = {i: 0 for i in ids}
         for e in edges:
             adj[e.from_].append(e.to)
-        WHITE, GRAY, BLACK = 0, 1, 2
-        color = {i: WHITE for i in ids}
-
-        def visit(n: str) -> None:
-            color[n] = GRAY
+            indeg[e.to] += 1
+        queue = [i for i in ids if indeg[i] == 0]
+        processed = 0
+        while queue:
+            n = queue.pop()
+            processed += 1
             for m in adj[n]:
-                if color[m] == GRAY:
-                    raise ValueError(f"cycle through node '{m}' (use a crew region for loops)")
-                if color[m] == WHITE:
-                    visit(m)
-            color[n] = BLACK
-
-        for i in ids:
-            if color[i] == WHITE:
-                visit(i)
+                indeg[m] -= 1
+                if indeg[m] == 0:
+                    queue.append(m)
+        if processed != len(ids):
+            stuck = next(i for i in ids if indeg[i] > 0)
+            raise ValueError(f"cycle through node '{stuck}' (use a crew region for loops)")
 
 
 Node.model_rebuild()

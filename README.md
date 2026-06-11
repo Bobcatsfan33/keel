@@ -86,8 +86,11 @@ Completed model calls are replayed from the log and **never re-billed**.
 
 ## Status
 
-Pre-1.0, built in four ~3-month phases toward GA. **Phase 1 (Core Runtime +
-Authoring) is complete** — see [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md) for
-the ticket-by-ticket map and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan.
-CI gates every PR on `ruff` + `mypy --strict` (L1–L5) + `import-linter` layers +
-unit/property/chaos tests + a `<3%` trace-overhead benchmark. Apache-2.0 for Phases 1–3.
+Pre-1.0, built in four ~3-month phases toward GA. **Phases 1 & 2 are complete** —
+Core Runtime + Authoring ([`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md)) and
+Durability at Depth + Observability ([`docs/PHASE2_STATUS.md`](docs/PHASE2_STATUS.md)):
+time-travel replay, worker leasing, human gates + webhooks, OTel GenAI export, a
+memory subsystem, and Postgres/NATS adapters. See [`docs/ROADMAP.md`](docs/ROADMAP.md)
+for the full plan. CI gates every PR on `ruff` + `mypy --strict` (L1–L5) +
+`import-linter` layers + unit/property/chaos tests + trace-overhead and viewer-render
+benchmarks. Apache-2.0 for Phases 1–3.

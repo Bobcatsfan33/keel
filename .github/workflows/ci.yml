@@ -18,3 +18,5 @@ jobs:
         run: pytest -q
       - name: trace-overhead benchmark (<3% p95)
         run: python -m tests.chaos.bench_overhead
+      - name: viewer render benchmark (10k events < 2s)
+        run: python -m tests.chaos.bench_viewer
