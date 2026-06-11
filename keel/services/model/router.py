@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 from ...substrate.events import EventType
+from ...executor.engine import RunContext
+from ...kir.schema import Node
 from .port import ModelPort, ModelRequest, ModelResponse, ModelError
 
 
@@ -33,7 +35,8 @@ class Router:
     def _provider_of(model: str) -> str:
         return model.split(":", 1)[0]
 
-    async def complete(self, ctx, node, req: ModelRequest, required_caps: frozenset[str],
+    async def complete(self, ctx: RunContext, node: Node, req: ModelRequest,
+                       required_caps: frozenset[str],
                        under_budget_pressure: bool = False) -> ModelResponse:
         name = node.model_policy if node.model_policy != "default" else self._default_policy_name
         policy = self._policies[name]

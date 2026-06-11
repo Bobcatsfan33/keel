@@ -42,13 +42,52 @@ L1  Substrate (trace bus, storage adapters, OTel export, clock/id/rng ports)
 ## Quickstart
 
 ```bash
-pip install keel            # SQLite + local trace viewer, zero extra services
-keel run examples/research_pipeline.py
-keel view                   # browse every run, step, prompt, token, and dollar
+pip install keel            # SQLite + content-addressed blobs, zero extra services
+pip install 'keel[viewer]'  # adds the local trace viewer
+
+keel run examples/research_pipeline.py   # durable, traced, budgeted run
+keel ls                                  # list runs
+keel show <run_id>                       # the full event timeline (the trace)
+keel view                                # browse runs/steps/prompts/tokens/dollars
 ```
+
+### Author a crew (CrewAI-comparable ergonomics)
+
+```python
+from keel.authoring import Agent, Task, Crew
+
+researcher = Agent("researcher", goal="Find the key facts on the topic")
+writer = Agent("writer", goal="Write a clear, sourced summary")
+
+research = Task("Research the topic thoroughly", agent=researcher)
+write = Task("Write the article from the research", agent=writer, context=[research])
+
+graph = Crew("research_pipeline", tasks=[research, write]).compile()   # -> KIR
+```
+
+`Agent`/`Task`/`Crew` are L5 sugar; they compile to **KIR** (L4), the only thing
+the executor runs. Swap authoring styles without touching the runtime.
+
+### Durability you can see
+
+```bash
+keel run pipeline.py --run-id demo        # pauses at a human gate
+keel approve demo editor_approval --resume   # decide + resume in a fresh process
+keel replay demo                          # re-drive from the log: byte-identical
+keel diff demo other                      # where two runs diverge (route/cost/payload)
+```
+
+A run is an append-only event log; resume and normal scheduling are the *same* fold.
+Completed model calls are replayed from the log and **never re-billed**.
+
+## CLI
+
+`keel run | ls | show | resume | approve | replay | diff | simulate | test | audit | view`
 
 ## Status
 
-Pre-1.0, built in four ~3-month phases toward GA. See
-[`docs/ROADMAP.md`](docs/ROADMAP.md) for the full engineering plan, per-phase
-acceptance criteria, and ticket breakdown. Apache-2.0 for Phases 1–3.
+Pre-1.0, built in four ~3-month phases toward GA. **Phase 1 (Core Runtime +
+Authoring) is complete** — see [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md) for
+the ticket-by-ticket map and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan.
+CI gates every PR on `ruff` + `mypy --strict` (L1–L5) + `import-linter` layers +
+unit/property/chaos tests + a `<3%` trace-overhead benchmark. Apache-2.0 for Phases 1–3.

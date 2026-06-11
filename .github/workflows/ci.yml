@@ -7,12 +7,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,viewer]"
       - name: lint
-        run: ruff check keel
-      - name: types
+        run: ruff check keel tests
+      - name: types (L1-L5, mypy --strict)
         run: mypy
       - name: import layers
         run: lint-imports
       - name: unit + property + chaos
         run: pytest -q
+      - name: trace-overhead benchmark (<3% p95)
+        run: python -m tests.chaos.bench_overhead

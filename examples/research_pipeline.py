@@ -1,50 +1,35 @@
-"""Minimal end-to-end KEEL run: a 2-node pipeline on the local durable runtime.
+"""End-to-end KEEL quickstart: author a crew, run it on the durable runtime.
 
-    python examples/research_pipeline.py
+    python examples/research_pipeline.py        # uses the deterministic mock model
+    keel run examples/research_pipeline.py      # same, via the CLI
+    keel view                                   # browse the trace
+
+The same file works under ``keel run`` because it exposes a module-level ``crew``.
 """
 import asyncio
-from keel.kir.schema import Graph, Node, Edge, NodeType
-from keel.substrate.ports import SystemClock, UlidIdGen, SeededRng, MemoryBlobStore
-from keel.substrate.store.memory import MemoryEventStore
-from keel.substrate.tracebus import TraceBus
-from keel.executor.engine import Executor, RunContext
-from keel.executor.state import RunState
-from keel.services.model.handlers import make_llm_handler, MockModelPort
 
+from keel.authoring import Agent, Task, Crew
+from keel.services.runner import Runner
+from keel.services.model.handlers import MockModelPort
 
-def build_graph() -> Graph:
-    return Graph(
-        graph_id="research_pipeline@demo",
-        nodes=[
-            Node(id="research", type=NodeType.LLM_STEP,
-                 config={"prompt": "Research the topic: ", "model": "mock:research"}),
-            Node(id="write", type=NodeType.LLM_STEP,
-                 config={"prompt": "Write it up: ", "model": "mock:write"}),
-        ],
-        edges=[Edge.model_validate({"from": "research", "to": "write"})],
-    )
+researcher = Agent("researcher", goal="Find the key facts on the topic")
+writer = Agent("writer", goal="Write a clear, sourced summary from the research")
+
+research = Task("Research the topic thoroughly", agent=researcher)
+write = Task("Write the article from the research", agent=writer, context=[research])
+
+crew = Crew("research_pipeline", tasks=[research, write])
 
 
 async def main() -> None:
-    graph = build_graph()
-    store = MemoryEventStore()
-    bus = TraceBus(store)
-    await bus.start()
-    blobs = MemoryBlobStore()
-    model = MockModelPort(reply='{"summary": "done"}')
-    handlers = {NodeType.LLM_STEP: make_llm_handler(model, price_per_1k=(0.003, 0.015))}
-
-    run_id = UlidIdGen().new()
-    state = RunState(run_id=run_id, graph=graph)
-    ctx = RunContext(run_id, SystemClock(), UlidIdGen(), SeededRng(0), blobs, bus, state)
-    final = await Executor(store, bus, blobs, handlers).run(graph, ctx)
-    await bus.flush()
-    await bus.close()
-
-    print(f"run {run_id} -> {final.status}")
-    print("steps:", {k: v.status for k, v in final.steps.items()})
-    print(f"total cost: ${final.total_cost_usd:.6f}  tokens in/out: "
-          f"{final.total_tokens_in}/{final.total_tokens_out}  model calls: {model.calls}")
+    graph = crew.compile()
+    runner = await Runner.open(in_memory=True, model=MockModelPort(reply='{"summary": "done"}'))
+    state = await runner.run(graph, run_id="example-1")
+    await runner.close()
+    print(f"run {state.run_id} -> {state.status}")
+    print("steps:", {k: v.status for k, v in state.steps.items()})
+    print(f"cost ${state.total_cost_usd:.6f}  tokens "
+          f"{state.total_tokens_in}->{state.total_tokens_out}")
 
 
 if __name__ == "__main__":

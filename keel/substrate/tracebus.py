@@ -25,6 +25,7 @@ class TraceBus:
         batch_size: int = 64,
     ) -> None:
         self._store = store
+        self.store = store  # public read-only handle (sub-runs reuse the same backend)
         self._redactor = redactor or Redactor()
         self._otel = otel_exporter
         self._q: asyncio.Queue[Event] = asyncio.Queue(maxsize=buffer_size)
@@ -52,13 +53,25 @@ class TraceBus:
                 if self._otel is not None:
                     for e in batch:
                         self._otel.export(e)
+                for _ in batch:
+                    self._q.task_done()
                 batch.clear()
 
     async def flush(self) -> None:
-        while not self._q.empty():
-            await asyncio.sleep(0.01)
+        # Event-driven: returns as soon as every queued event has been persisted
+        # (the drainer calls task_done per event), not on a polling interval.
+        await self._q.join()
 
     async def close(self) -> None:
         self._closing = True
         if self._task is not None:
-            await self._task
+            # Drain everything still queued, then stop the loop immediately instead
+            # of letting it idle in its wait_for timeout (which would add tail
+            # latency to every short-lived run).
+            await self._q.join()
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import math
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, Any, Protocol, runtime_checkable
 from ..substrate.events import Event, EventType, TokenUsage
 from ..substrate.ports import Clock, IdGen, Rng, BlobStore
 from ..substrate.tracebus import TraceBus
@@ -20,12 +20,21 @@ class FatalError(Exception):
     pass
 
 
+class GatePaused(Exception):
+    """Unwinds the run loop cleanly without failing it. The run is *parked* in the
+    log with zero compute until an external event (gate approval, budget raise)
+    re-enqueues it. Defined here so both the executor and the gate/budget handlers
+    can reference it without an import cycle."""
+
+
 class RunContext:
     """One per run. Holds the injected ports so nothing below calls a clock, rng,
-    or id generator directly. During replay these are the Replay* variants."""
+    or id generator directly. During replay these are the Replay* variants. The
+    optional ``scope`` prefix is what the budgeter charges spend against."""
 
     def __init__(self, run_id: str, clock: Clock, ids: IdGen, rng: Rng,
-                 blobs: BlobStore, bus: TraceBus, state: RunState) -> None:
+                 blobs: BlobStore, bus: TraceBus, state: RunState,
+                 scope: Optional[str] = None) -> None:
         self.run_id = run_id
         self.clock = clock
         self.ids = ids
@@ -33,11 +42,15 @@ class RunContext:
         self.blobs = blobs
         self.bus = bus
         self.state = state
+        self.scope = scope or f"run:{run_id}"
+
+    def scope_for(self, node_id: str) -> str:
+        return f"{self.scope}/node:{node_id}"
 
     async def emit(self, type: EventType, *, node_id: Optional[str] = None,
                    attempt: int = 1, payload: Optional[bytes] = None,
                    tokens: Optional[TokenUsage] = None, cost_usd: float = 0.0,
-                   data: Optional[dict] = None) -> Event:
+                   data: Optional[dict[str, Any]] = None) -> Event:
         ref = self.blobs.put(payload) if payload is not None else None
         ev = Event(
             event_id=self.ids.new(),
@@ -59,16 +72,29 @@ class RunContext:
         return ev
 
 
-NodeHandler = Callable[[RunContext, Node, dict], Awaitable[bytes]]
+NodeHandler = Callable[["RunContext", Node, dict[str, bytes]], Awaitable[bytes]]
+
+
+@runtime_checkable
+class StepInterceptor(Protocol):
+    """Cross-cutting hook around every step. Used by the budgeter (L3) to enforce
+    spend limits without the executor (L2) importing it. ``before_step`` may raise
+    ``GatePaused`` to park the run or ``FatalError`` to kill it."""
+
+    async def before_step(self, ctx: RunContext, node: Node) -> None: ...
+    async def after_step(self, ctx: RunContext, node: Node, cost_usd: float,
+                         tokens_in: int, tokens_out: int) -> None: ...
 
 
 class Executor:
     def __init__(self, store: EventStore, bus: TraceBus, blobs: BlobStore,
-                 handlers: dict[NodeType, NodeHandler]) -> None:
+                 handlers: dict[NodeType, NodeHandler],
+                 interceptors: Optional[list[StepInterceptor]] = None) -> None:
         self._store = store
         self._bus = bus
         self._blobs = blobs
         self._handlers = handlers
+        self._interceptors = interceptors or []
 
     async def run(self, graph: Graph, ctx: RunContext) -> RunState:
         st = ctx.state
@@ -82,50 +108,90 @@ class Executor:
             if not frontier:
                 break
             await asyncio.gather(*(self._run_node(graph, ctx, nid) for nid in frontier))
-            if st.status in ("paused", "failed"):
+            if st.status in ("paused", "failed", "cancelled"):
                 return st
 
         await ctx.emit(EventType.RUN_COMPLETED)
         return st
 
+    async def resume(self, graph: Graph, ctx: RunContext) -> RunState:
+        """Alias that makes the intent explicit at call sites. Resume and a fresh
+        run are the *same* code path — both fold, then schedule the frontier."""
+        return await self.run(graph, ctx)
+
     async def _run_node(self, graph: Graph, ctx: RunContext, node_id: str) -> None:
-        node = next(n for n in graph.nodes if n.id == node_id)
+        node = self._node(graph, node_id)
         rec = ctx.state.steps.get(node_id)
         attempt = (rec.attempt + 1) if rec and rec.status == "started" else 1
+
+        # Branch not taken: mark skipped (propagates to its successors via the fold).
+        if (rec is None or rec.status != "started") and ctx.state.should_skip(node_id):
+            await ctx.emit(EventType.STEP_SKIPPED, node_id=node_id)
+            return
+
+        # Cross-cutting gate (budget, policy) BEFORE any work is scheduled.
+        try:
+            for interceptor in self._interceptors:
+                await interceptor.before_step(ctx, node)
+        except GatePaused:
+            return  # status already set to paused by the interceptor
+        except FatalError as err:
+            await self._fail_node(ctx, node_id, attempt, "permanent", str(err))
+            return
 
         await ctx.emit(EventType.STEP_SCHEDULED, node_id=node_id, attempt=attempt)
         await ctx.emit(EventType.STEP_STARTED, node_id=node_id, attempt=attempt)
 
         handler = self._handlers[node.type]
         inputs = self._gather_inputs(graph, ctx, node)
+        cost_before = ctx.state.total_cost_usd
+        tin_before, tout_before = ctx.state.total_tokens_in, ctx.state.total_tokens_out
         try:
             result_bytes = await handler(ctx, node, inputs)
+        except GatePaused:
+            return  # human_gate / budget pause: run parked, not failed
         except RetryableError as err:
             if attempt <= node.retry.max:
                 await ctx.emit(EventType.STEP_RETRIED, node_id=node_id, attempt=attempt,
                                data={"reason": err.taxonomy})
                 await self._backoff(node, attempt)
                 return await self._run_node(graph, ctx, node_id)
-            await ctx.emit(EventType.STEP_FAILED, node_id=node_id, attempt=attempt,
-                           data={"error": {"type": err.taxonomy, "msg": str(err)}})
-            await ctx.emit(EventType.RUN_FAILED)
-            ctx.state.status = "failed"
+            await self._fail_node(ctx, node_id, attempt, err.taxonomy, str(err))
             return
         except FatalError as err:
-            await ctx.emit(EventType.STEP_FAILED, node_id=node_id, attempt=attempt,
-                           data={"error": {"type": "permanent", "msg": str(err)}})
-            await ctx.emit(EventType.RUN_FAILED)
-            ctx.state.status = "failed"
+            await self._fail_node(ctx, node_id, attempt, "permanent", str(err))
+            return
+        except Exception as err:  # noqa: BLE001 — invariant #1: no silent crash
+            await self._fail_node(ctx, node_id, attempt, "internal",
+                                  f"{type(err).__name__}: {err}")
             return
 
         await ctx.emit(EventType.STEP_COMPLETED, node_id=node_id, attempt=attempt,
                        payload=result_bytes)
+        for interceptor in self._interceptors:
+            await interceptor.after_step(
+                ctx, node,
+                ctx.state.total_cost_usd - cost_before,
+                ctx.state.total_tokens_in - tin_before,
+                ctx.state.total_tokens_out - tout_before,
+            )
 
-    def _gather_inputs(self, graph: Graph, ctx: RunContext, node: Node) -> dict:
+    async def _fail_node(self, ctx: RunContext, node_id: str, attempt: int,
+                         taxonomy: str, msg: str) -> None:
+        await ctx.emit(EventType.STEP_FAILED, node_id=node_id, attempt=attempt,
+                       data={"error": {"type": taxonomy, "msg": msg}})
+        await ctx.emit(EventType.RUN_FAILED)
+        ctx.state.status = "failed"
+
+    @staticmethod
+    def _node(graph: Graph, node_id: str) -> Node:
+        return next(n for n in graph.nodes if n.id == node_id)
+
+    def _gather_inputs(self, graph: Graph, ctx: RunContext, node: Node) -> dict[str, bytes]:
         """Pull predecessors' completed outputs from the blob store. A resumed run
         reads them back instead of recomputing — the 'never re-billed' guarantee."""
         preds = [e.from_ for e in graph.edges if e.to == node.id]
-        out: dict = {}
+        out: dict[str, bytes] = {}
         for p in preds:
             rec = ctx.state.steps.get(p)
             if rec and rec.result_ref:
