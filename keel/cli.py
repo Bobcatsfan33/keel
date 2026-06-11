@@ -205,8 +205,35 @@ async def cmd_simulate(args: argparse.Namespace) -> int:
 
 
 async def cmd_test(args: argparse.Namespace) -> int:
-    if args.action != "record":
-        _die("usage: keel test record <run_id>")
+    from .services.evals import EvalCase, EvalRunner
+    from .services.evals.junit import to_junit
+    if args.action == "record":
+        return await _test_record(args)
+    if args.action == "run":
+        runner = await _runner(args)
+        cases = []
+        suite = Path(args.suite or ".")
+        files = sorted(suite.glob("*.json")) if suite.is_dir() else [suite]
+        for f in files:
+            try:
+                cases.append(EvalCase.model_validate_json(f.read_text()))
+            except Exception:  # noqa: BLE001 — skip non-case json
+                continue
+        if not cases:
+            _die(f"no eval cases found in {suite}")
+        er = EvalRunner(runner.store, runner.blobs)
+        report = await er.run_suite(cases, n_flake=args.flake)
+        await runner.close()
+        if args.junit:
+            Path(args.junit).write_text(to_junit(report))
+            print(f"wrote JUnit -> {args.junit}")
+        print(f"eval: {report['passed']}/{report['total']} passed, "
+              f"{report['failed']} failed, flaky={report['flaky']}")
+        return 0 if report["failed"] == 0 else 1
+    _die("usage: keel test record <run_id> | keel test run --suite <dir>")
+
+
+async def _test_record(args: argparse.Namespace) -> int:
     runner = await _runner(args)
     try:
         state = await runner.load_state(args.run_id)
@@ -344,9 +371,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.set_defaults(func=cmd_simulate, _async=True)
 
     p_test = sub.add_parser("test", help="eval-case tooling")
-    p_test.add_argument("action", choices=["record"])
-    p_test.add_argument("run_id")
+    p_test.add_argument("action", choices=["record", "run"])
+    p_test.add_argument("run_id", nargs="?", default=None)
     p_test.add_argument("--out", default=None)
+    p_test.add_argument("--suite", default=None, help="dir of eval case .json files")
+    p_test.add_argument("--junit", default=None, help="write JUnit XML to this path")
+    p_test.add_argument("--flake", type=int, default=3, help="runs per case (flake detection)")
     _add_store_args(p_test)
     p_test.set_defaults(func=cmd_test, _async=True)
 
