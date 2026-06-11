@@ -55,6 +55,7 @@ INDEX_HTML = r"""<!doctype html>
 </head>
 <body>
 <header><b>KEEL</b><span class="tag">trace viewer</span>
+  <button onclick="showCosts()" style="margin-left:12px">Costs</button>
   <span id="hint" class="muted" style="margin-left:auto"></span></header>
 <div class="wrap">
   <div class="runs" id="runs"></div>
@@ -137,6 +138,25 @@ async function decideGate(node, decision) {
   await fetch(`/api/runs/${current}/gates/${node}/${decision}`, {method:'POST'});
   $('#hint').textContent = `${decision}d ${node} — resumes on next worker / keel resume`;
   openRun(current);
+}
+function costTable(title, obj) {
+  const rows = Object.entries(obj).sort((a,b)=>b[1]-a[1])
+    .map(([k,v]) => `<tr><td>${k}</td><td class="num">$${v.toFixed(6)}</td></tr>`).join('');
+  return `<h3>${title}</h3><table><tbody>${rows || '<tr><td class="muted">none</td></tr>'}</tbody></table>`;
+}
+async function showCosts() {
+  const c = await (await fetch('/api/costs')).json();
+  document.querySelectorAll('.run').forEach(d => d.classList.remove('sel'));
+  const exp = c.most_expensive.map(s =>
+    `<tr><td>${s.graph_id}.${s.node_id}</td><td class="muted">${s.run_id}</td>
+     <td class="num">$${s.usd.toFixed(6)}</td></tr>`).join('');
+  $('#main').innerHTML = `
+    <div class="bar"><span class="pill">total spend $${c.total_usd.toFixed(6)}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:18px">
+      ${costTable('By graph', c.by_graph)} ${costTable('By model', c.by_model)}
+      ${costTable('By tenant', c.by_tenant)} ${costTable('By day', c.by_day)}
+    </div>
+    <h3>Most expensive steps</h3><table><tbody>${exp}</tbody></table>`;
 }
 async function diffWith() {
   const other = prompt('Diff current run against run id:');

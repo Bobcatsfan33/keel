@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS runs (
     run_id     TEXT PRIMARY KEY,
     graph_id   TEXT NOT NULL,
     graph_json TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    tenant     TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS leases (
     run_id     TEXT PRIMARY KEY,

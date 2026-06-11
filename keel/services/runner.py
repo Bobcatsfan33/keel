@@ -111,13 +111,13 @@ class Runner:
         later pick it up by id (``resume`` recovers the graph). Returns the run id."""
         rid = run_id or self.ids.new()
         await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
-                                      self.clock.now().isoformat())
+                                      self.clock.now().isoformat(), self.tenant or "")
         return rid
 
     async def run(self, graph: Graph, *, run_id: Optional[str] = None) -> RunState:
         rid = run_id or self.ids.new()
         await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
-                                      self.clock.now().isoformat())
+                                      self.clock.now().isoformat(), self.tenant or "")
         scope = self._run_scope(rid)
         budgeter = self._build_budgeter(rid)
         bus = self._new_bus()
