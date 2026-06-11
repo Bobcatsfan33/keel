@@ -55,6 +55,7 @@ class Budgeter:
         self._clock = clock
         self._budgets: dict[str, Budget] = {}
         self._meters: dict[str, Meter] = {}
+        self._warned: set[str] = set()
 
     def register(self, scope: str, budget: Budget) -> None:
         self._budgets[scope] = budget
@@ -66,6 +67,9 @@ class Budgeter:
         m = self._meters.get(scope)
         if m is not None:
             m.usd, m.tokens, m.steps = usd, tokens, steps
+
+    def meter(self, scope: str) -> Optional[Meter]:
+        return self._meters.get(scope)
 
     def _scopes_for(self, node_scope: str) -> list[str]:
         parts = node_scope.split("/")
@@ -88,45 +92,65 @@ class Budgeter:
                     return BudgetExceeded(scope, "wallclock", b.max_wallclock_s, b.action)
         return None
 
-    def commit(self, node_scope: str, add_usd: float, add_tokens: int) -> list[str]:
-        warnings: list[str] = []
+    def commit_spend(self, node_scope: str, usd: float, tokens: int) -> None:
+        """Charge cost/tokens to every ancestor scope. Called from RunContext.emit
+        for each cost-bearing event, so retries and crew-region spend all land here."""
+        for scope in self._scopes_for(node_scope):
+            m = self._meters.get(scope)
+            if m is not None:
+                m.usd += usd
+                m.tokens += tokens
+
+    def commit_step(self, node_scope: str) -> None:
+        """Count one completed step against every ancestor scope."""
+        for scope in self._scopes_for(node_scope):
+            m = self._meters.get(scope)
+            if m is not None:
+                m.steps += 1
+
+    def new_warnings(self, node_scope: str) -> list[str]:
+        """Scopes that have crossed warn_at since last asked (each warns once)."""
+        out: list[str] = []
         for scope in self._scopes_for(node_scope):
             b, m = self._budgets.get(scope), self._meters.get(scope)
-            if not b or not m:
+            if not b or not m or scope in self._warned:
                 continue
-            m.usd += add_usd
-            m.tokens += add_tokens
-            m.steps += 1
-            if b.max_usd and m.usd >= b.warn_at * b.max_usd:
-                warnings.append(scope)
-        return warnings
+            crossed = (
+                (b.max_usd is not None and m.usd >= b.warn_at * b.max_usd)
+                or (b.max_tokens is not None and m.tokens >= b.warn_at * b.max_tokens)
+                or (b.max_steps is not None and m.steps >= b.warn_at * b.max_steps)
+            )
+            if crossed:
+                self._warned.add(scope)
+                out.append(scope)
+        return out
 
 
 class BudgetInterceptor:
-    """Bridges the Budgeter to the executor's StepInterceptor protocol so spend is
-    enforced at the one chokepoint every step crosses — there is no spend path that
-    bypasses it (invariant #3). ``before_step`` halts if already over a limit;
-    ``after_step`` commits the step's actual spend and halts at the next boundary if
-    that pushed a scope over. PAUSE reuses the gate parking mechanism, so raising a
-    budget and re-enqueuing the run resumes it exactly where it stopped.
+    """Bridges the Budgeter to the executor's StepInterceptor protocol. Spend itself
+    is metered in RunContext.emit (the chokepoint), so this only (a) halts at a step
+    boundary if a limit is already breached, and (b) counts the step + emits warnings.
+    Because enforcement is checked in ``before_step`` (which the executor wraps), a
+    breach halts within one step boundary of the limit. PAUSE reuses gate parking, so
+    raising the budget and re-enqueuing resumes exactly where it stopped.
     """
 
     def __init__(self, budgeter: Budgeter) -> None:
         self._b = budgeter
 
     async def before_step(self, ctx: RunContext, node: Node) -> None:
-        breach = self._b.would_breach(ctx.scope_for(node.id), 0.0, 0)
+        scope = ctx.scope_for(node.id)
+        for w in self._b.new_warnings(scope):
+            await ctx.emit(EventType.BUDGET_WARNING, node_id=node.id,
+                           data={"scope": w, "kind": "threshold"})
+        breach = self._b.would_breach(scope, 0.0, 0)
         if breach is not None:
             await self._act(ctx, node, breach)
 
     async def after_step(self, ctx: RunContext, node: Node, cost_usd: float,
                          tokens_in: int, tokens_out: int) -> None:
-        # Commit the step's actual spend. Enforcement happens in the NEXT step's
-        # before_step (which the executor wraps), so a breach halts within one step
-        # boundary of the limit without raising from outside the protected region.
-        scope = ctx.scope_for(node.id)
-        warnings = self._b.commit(scope, cost_usd, tokens_in + tokens_out)
-        for w in warnings:
+        self._b.commit_step(ctx.scope_for(node.id))
+        for w in self._b.new_warnings(ctx.scope_for(node.id)):
             await ctx.emit(EventType.BUDGET_WARNING, node_id=node.id,
                            data={"scope": w, "kind": "threshold"})
 

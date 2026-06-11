@@ -18,7 +18,7 @@ from ..substrate.store.sqlite import SqliteEventStore
 from ..substrate.store.memory import MemoryEventStore
 from ..substrate.catalog import (RunCatalog, SqliteRunCatalog, MemoryRunCatalog, RunInfo)
 from ..kir.schema import Graph
-from ..executor.engine import Executor, RunContext, StepInterceptor
+from ..executor.engine import Executor, RunContext
 from ..executor.state import RunState
 from .budget import Budget, Budgeter, BudgetInterceptor
 from .model.port import ModelPort
@@ -43,6 +43,8 @@ class Runner:
     redactor: Redactor
     otel: Optional[OTelExporter] = None
     listeners: Optional[list[EventListener]] = None
+    tenant: Optional[str] = None
+    tenant_budget: Optional[Budget] = None
     _owns: bool = True
 
     @classmethod
@@ -60,6 +62,8 @@ class Runner:
         redactor: Optional[Redactor] = None,
         otel: Optional[OTelExporter] = None,
         listeners: Optional[list[EventListener]] = None,
+        tenant: Optional[str] = None,
+        tenant_budget: Optional[Budget] = None,
         price_table: Any = None,
         seed: int = 0,
     ) -> "Runner":
@@ -78,43 +82,52 @@ class Runner:
         return cls(store=store, catalog=catalog, blobs=blobs, handlers=handlers,
                    clock=SystemClock(), ids=UlidIdGen(), rng=SeededRng(seed),
                    budget=budget or Budget.default(), redactor=redactor or Redactor(),
-                   otel=otel, listeners=listeners)
+                   otel=otel, listeners=listeners, tenant=tenant,
+                   tenant_budget=tenant_budget)
 
     def _new_bus(self) -> TraceBus:
         return TraceBus(self.store, self.redactor, self.otel, listeners=self.listeners)
 
-    def _budget_interceptors(self, scope: str, state: Optional[RunState] = None
-                             ) -> list[StepInterceptor]:
+    def _run_scope(self, rid: str) -> str:
+        return f"tenant:{self.tenant}/run:{rid}" if self.tenant else f"run:{rid}"
+
+    def _build_budgeter(self, rid: str, state: Optional[RunState] = None) -> Budgeter:
         budgeter = Budgeter(self.clock)
+        scope = self._run_scope(rid)
+        if self.tenant and self.tenant_budget is not None:
+            budgeter.register(f"tenant:{self.tenant}", self.tenant_budget)
         budgeter.register(scope, self.budget)
         if state is not None:
-            completed = sum(1 for r in state.steps.values()
-                            if r.status in ("completed", "skipped"))
-            budgeter.seed(scope, state.total_cost_usd,
-                          state.total_tokens_in + state.total_tokens_out, completed)
-        return [BudgetInterceptor(budgeter)]
+            # Re-load committed spend so budgets stay honest across resume.
+            budgeter.commit_spend(f"{scope}/node:_seed", state.total_cost_usd,
+                                  state.total_tokens_in + state.total_tokens_out)
+            for _ in range(sum(1 for r in state.steps.values()
+                               if r.status in ("completed", "skipped"))):
+                budgeter.commit_step(f"{scope}/node:_seed")
+        return budgeter
 
     async def register(self, graph: Graph, *, run_id: Optional[str] = None) -> str:
         """Record a run's graph in the catalog without executing it, so a worker can
         later pick it up by id (``resume`` recovers the graph). Returns the run id."""
         rid = run_id or self.ids.new()
         await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
-                                      self.clock.now().isoformat())
+                                      self.clock.now().isoformat(), self.tenant or "")
         return rid
 
     async def run(self, graph: Graph, *, run_id: Optional[str] = None) -> RunState:
         rid = run_id or self.ids.new()
         await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
-                                      self.clock.now().isoformat())
-        scope = f"run:{rid}"
+                                      self.clock.now().isoformat(), self.tenant or "")
+        scope = self._run_scope(rid)
+        budgeter = self._build_budgeter(rid)
         bus = self._new_bus()
         await bus.start()
         state = RunState(run_id=rid, graph=graph)
         ctx = RunContext(rid, self.clock, self.ids, self.rng, self.blobs, bus, state,
-                         scope=scope)
+                         scope=scope, budgeter=budgeter)
         try:
             final = await Executor(self.store, bus, self.blobs, self.handlers,
-                                   self._budget_interceptors(scope)).run(graph, ctx)
+                                   [BudgetInterceptor(budgeter)]).run(graph, ctx)
         finally:
             await bus.flush()
             await bus.close()
@@ -129,14 +142,15 @@ class Runner:
         state = RunState.fold(run_id, graph, events)
         if state.status in ("completed", "failed", "cancelled"):
             return state  # terminal — nothing to resume
-        scope = f"run:{run_id}"
+        scope = self._run_scope(run_id)
+        budgeter = self._build_budgeter(run_id, state)
         bus = self._new_bus()
         await bus.start()
         ctx = RunContext(run_id, self.clock, self.ids, self.rng, self.blobs, bus, state,
-                         scope=scope)
+                         scope=scope, budgeter=budgeter)
         try:
             final = await Executor(self.store, bus, self.blobs, self.handlers,
-                                   self._budget_interceptors(scope, state)).resume(graph, ctx)
+                                   [BudgetInterceptor(budgeter)]).resume(graph, ctx)
         finally:
             await bus.flush()
             await bus.close()

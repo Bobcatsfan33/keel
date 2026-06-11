@@ -92,6 +92,12 @@ def create_app(db_path: str = "keel.db", blob_dir: str = "blobs") -> FastAPI:
         return JSONResponse({"run_id": run_id, "node_id": node_id, "decision": decision,
                              "note": "recorded; resume on next worker poll or `keel resume`"})
 
+    @app.get("/api/costs")
+    async def costs() -> JSONResponse:
+        from ..services.cost import cost_rollup
+        roll = await cost_rollup(app.state.store, app.state.catalog)
+        return JSONResponse(roll.to_dict())
+
     @app.get("/api/diff/{run_a}/{run_b}")
     async def diff(run_a: str, run_b: str) -> JSONResponse:
         from ..executor.replay import diff_runs
