@@ -114,8 +114,28 @@ async function openRun(id) {
       <span class="pill">${r.events.length} events</span>
       <span class="pill">priciest: ${exp}</span>
     </div>
+    ${gatePanel(r)}
     <table><thead><tr><th>#</th><th>type</th><th>node</th><th>tok</th><th>cost</th><th>data</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
+}
+
+function openGates(r) {
+  const decided = new Set();
+  for (const e of r.events)
+    if (e.type==='gate.approved'||e.type==='gate.rejected'||e.type==='gate.expired') decided.add(e.node_id);
+  return r.events.filter(e => e.type==='gate.opened' && !decided.has(e.node_id)).map(e => e.node_id);
+}
+function gatePanel(r) {
+  const gates = openGates(r);
+  if (!gates.length) return '';
+  return gates.map(n => `<div class="bar"><span class="pill status-paused">gate: ${n}</span>
+    <button onclick="decideGate('${n}','approve')">Approve</button>
+    <button onclick="decideGate('${n}','reject')">Reject</button></div>`).join('');
+}
+async function decideGate(node, decision) {
+  await fetch(`/api/runs/${current}/gates/${node}/${decision}`, {method:'POST'});
+  $('#hint').textContent = `${decision}d ${node} — resumes on next worker / keel resume`;
+  openRun(current);
 }
 
 function fmtData(e) {

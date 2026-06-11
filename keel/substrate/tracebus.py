@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Callable, Awaitable
 from .events import Event
 from .store.base import EventStore
 from .redact import Redactor
@@ -8,6 +8,12 @@ from .redact import Redactor
 
 class OTelExporter(Protocol):
     def export(self, event: Event) -> None: ...
+
+
+# Async, post-persist listeners (webhooks, notifiers). They observe redacted,
+# persisted events and must not raise — a failing listener is isolated, never
+# allowed to wedge the trace bus.
+EventListener = Callable[[Event], Awaitable[None]]
 
 
 class TraceBus:
@@ -23,11 +29,13 @@ class TraceBus:
         otel_exporter: Optional[OTelExporter] = None,
         buffer_size: int = 4096,
         batch_size: int = 64,
+        listeners: Optional[list[EventListener]] = None,
     ) -> None:
         self._store = store
         self.store = store  # public read-only handle (sub-runs reuse the same backend)
         self._redactor = redactor or Redactor()
         self._otel = otel_exporter
+        self._listeners = listeners or []
         self._q: asyncio.Queue[Event] = asyncio.Queue(maxsize=buffer_size)
         self._batch_size = batch_size
         self._task: Optional[asyncio.Task[None]] = None
@@ -53,6 +61,12 @@ class TraceBus:
                 if self._otel is not None:
                     for e in batch:
                         self._otel.export(e)
+                for e in batch:
+                    for listener in self._listeners:
+                        try:
+                            await listener(e)
+                        except Exception:  # noqa: BLE001 — a listener never wedges the bus
+                            pass
                 for _ in batch:
                     self._q.task_done()
                 batch.clear()

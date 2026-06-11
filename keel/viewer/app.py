@@ -16,9 +16,10 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from ..substrate.store.sqlite import SqliteEventStore
 from ..substrate.catalog import SqliteRunCatalog
-from ..substrate.ports import FileBlobStore
+from ..substrate.ports import FileBlobStore, SystemClock, UlidIdGen
 from ..kir.schema import Graph
 from ..executor.state import RunState
+from ..services.gate_service import GateService
 from .spa import INDEX_HTML
 
 
@@ -77,6 +78,19 @@ def create_app(db_path: str = "keel.db", blob_dir: str = "blobs") -> FastAPI:
         top = sorted(by_node.items(), key=lambda kv: kv[1], reverse=True)
         return JSONResponse({"by_node": by_node, "by_model": by_model,
                              "most_expensive": top[0] if top else None})
+
+    @app.post("/api/runs/{run_id}/gates/{node_id}/{decision}")
+    async def decide_gate(run_id: str, node_id: str, decision: str) -> JSONResponse:
+        if decision not in ("approve", "reject"):
+            raise HTTPException(400, "decision must be approve|reject")
+        gates = GateService(app.state.store, UlidIdGen(), SystemClock(), app.state.blobs)
+        if decision == "approve":
+            await gates.approve(run_id, node_id)
+        else:
+            await gates.reject(run_id, node_id)
+        # The decision is durable; a worker (or `keel resume`) completes the run.
+        return JSONResponse({"run_id": run_id, "node_id": node_id, "decision": decision,
+                             "note": "recorded; resume on next worker poll or `keel resume`"})
 
     @app.get("/api/blob/{ref:path}")
     async def get_blob(ref: str) -> PlainTextResponse:
