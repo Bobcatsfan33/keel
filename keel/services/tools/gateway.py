@@ -12,12 +12,15 @@ import asyncio
 import inspect
 import json
 from collections import deque
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from ...substrate.events import EventType
 from ...executor.engine import RunContext
 from ...kir.schemas_registry import resolve_schema
 from .contract import RegisteredTool, ToolDenied
 from .sandbox import Sandbox, SandboxViolation
+
+if TYPE_CHECKING:
+    from ..policy import PolicyEngine
 
 
 class _RateLimiter:
@@ -38,10 +41,12 @@ class _RateLimiter:
 
 class ToolGateway:
     def __init__(self, tools: dict[str, RegisteredTool],
-                 sandbox: "Sandbox | None" = None) -> None:
+                 sandbox: "Sandbox | None" = None,
+                 policy: "PolicyEngine | None" = None) -> None:
         self._tools = tools
         self._rl = _RateLimiter()
         self._sandbox = sandbox
+        self._policy = policy
 
     def names(self) -> list[str]:
         return sorted(self._tools)
@@ -64,6 +69,16 @@ class ToolGateway:
         except Exception as e:  # noqa: BLE001
             await self._deny(ctx, tool_name, "invalid_input", {"detail": str(e)})
             raise ToolDenied(tool_name, "invalid_input", str(e)) from e
+
+        # Policy + RBAC at the boundary (emits policy.violation on its own).
+        if self._policy is not None:
+            from ..policy import PolicyContext, PolicyViolation
+            try:
+                await self._policy.enforce(ctx, PolicyContext(
+                    principal=agent_id, action="tool_call", tool=tool_name,
+                    args=validated_in))
+            except PolicyViolation as e:
+                raise ToolDenied(tool_name, "policy_violation", str(e)) from e
 
         if not self._rl.check(tool_name, c.rate_limit_per_min, ctx.clock.monotonic()):
             await self._deny(ctx, tool_name, "rate_limited")
