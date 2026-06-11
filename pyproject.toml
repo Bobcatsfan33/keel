@@ -1,0 +1,52 @@
+[project]
+name = "keel"
+version = "0.1.0"
+description = "Production-first agent runtime: durable, fully-traced, budget-governed execution for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "KEEL contributors" }]
+keywords = ["agents", "llm", "runtime", "observability", "durable-execution", "ai"]
+dependencies = [
+    "pydantic>=2.6",
+    "httpx>=0.27",
+    "aiosqlite>=0.20",
+    "python-ulid>=2.2",
+]
+
+[project.optional-dependencies]
+pg = ["asyncpg>=0.29"]
+nats = ["nats-py>=2.6"]
+viewer = ["fastapi>=0.110", "uvicorn>=0.29"]
+sandbox = []
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "hypothesis>=6", "mypy>=1.9", "ruff>=0.4", "import-linter>=2"]
+
+[project.scripts]
+keel = "keel.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.importlinter]
+root_package = "keel"
+
+[[tool.importlinter.contracts]]
+name = "Layers point downward only"
+type = "layers"
+layers = [
+    "keel.authoring",
+    "keel.kir",
+    "keel.services",
+    "keel.executor",
+    "keel.substrate",
+]
