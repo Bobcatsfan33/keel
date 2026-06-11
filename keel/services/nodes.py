@@ -174,8 +174,9 @@ async def _no_model_handler(ctx: RunContext, node: Node, inputs: dict[str, bytes
 
 
 def router_completer(router: Router, required_caps: frozenset[str] = frozenset()) -> Completer:
-    async def _complete(ctx: RunContext, node: Node, req: ModelRequest) -> ModelResponse:
-        return await router.complete(ctx, node, req, required_caps)
+    async def _complete(ctx: RunContext, node: Node, req: ModelRequest,
+                        escalate: int = 0) -> ModelResponse:
+        return await router.complete(ctx, node, req, required_caps, escalate=escalate)
     return _complete
 
 

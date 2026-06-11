@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from typing import Callable, Awaitable, Optional, AsyncIterator
+from typing import Awaitable, Optional, AsyncIterator, Protocol
 from pydantic import ValidationError
 from ...substrate.events import EventType, TokenUsage
 from ...executor.engine import RunContext, FatalError, NodeHandler
@@ -9,16 +9,23 @@ from ...kir.schemas_registry import resolve_schema
 from .port import ModelPort, ModelRequest, ModelResponse
 from .pricing import PriceTable
 
-# A Completer turns (run context, node, request) into a response. A plain ModelPort
-# becomes one via port_completer(); the Router is one directly. This is what lets the
-# same handler back both the "one model" and the "model_policy" execution styles.
-Completer = Callable[[RunContext, Node, ModelRequest], Awaitable[ModelResponse]]
-
 MAX_REPROMPTS = 2
 
 
+class Completer(Protocol):
+    """Turns (run context, node, request) into a response. A plain ModelPort becomes
+    one via port_completer(); the Router is one (via router_completer). ``escalate``
+    is the count of prior validation failures, letting a routed completer climb its
+    candidate ladder (cheap -> frontier) when the cheap model can't satisfy the
+    schema."""
+
+    def __call__(self, ctx: RunContext, node: Node, req: ModelRequest,
+                 escalate: int = 0) -> Awaitable[ModelResponse]: ...
+
+
 def port_completer(port: ModelPort) -> Completer:
-    async def _complete(ctx: RunContext, node: Node, req: ModelRequest) -> ModelResponse:
+    async def _complete(ctx: RunContext, node: Node, req: ModelRequest,
+                        escalate: int = 0) -> ModelResponse:
         return await port.complete(req)
     return _complete
 
@@ -75,7 +82,9 @@ def make_llm_handler(
                 payload=json.dumps(req.messages).encode(),
                 data={"model": req.model, "reprompt": attempt},
             )
-            resp = await completer(ctx, node, req)
+            # escalate=attempt: each schema failure climbs the policy's candidate
+            # ladder (when the policy escalates on validation_failure).
+            resp = await completer(ctx, node, req, escalate=attempt)
             await ctx.emit(
                 EventType.LLM_RESPONSE, node_id=node.id,
                 payload=resp.text.encode(),
