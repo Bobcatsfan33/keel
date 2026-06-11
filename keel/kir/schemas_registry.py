@@ -37,7 +37,7 @@ def resolve_schema(ref: str | None) -> Type[BaseModel] | None:
     """Resolve a ref to a model, or None if ref is None. Raises if unknown so a
     typo fails loudly at run-construction time rather than silently skipping
     validation."""
-    if ref is None:
+    if not ref:  # None or "" -> no schema declared
         return None
     short = _short(ref)
     try:
@@ -51,7 +51,9 @@ def resolve_schema(ref: str | None) -> Type[BaseModel] | None:
 
 
 def is_registered(ref: str | None) -> bool:
-    return ref is not None and _short(ref) in _REGISTRY
+    if not ref:
+        return False
+    return _short(ref) in _REGISTRY
 
 
 def clear() -> None:

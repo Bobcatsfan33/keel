@@ -3,6 +3,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from ..substrate.ports import Clock
+from ..substrate.events import EventType
+from ..executor.engine import RunContext, GatePaused, FatalError
+from ..kir.schema import Node
 
 
 class BudgetAction(str, Enum):
@@ -90,3 +93,49 @@ class Budgeter:
             if b.max_usd and m.usd >= b.warn_at * b.max_usd:
                 warnings.append(scope)
         return warnings
+
+
+class BudgetInterceptor:
+    """Bridges the Budgeter to the executor's StepInterceptor protocol so spend is
+    enforced at the one chokepoint every step crosses — there is no spend path that
+    bypasses it (invariant #3). ``before_step`` halts if already over a limit;
+    ``after_step`` commits the step's actual spend and halts at the next boundary if
+    that pushed a scope over. PAUSE reuses the gate parking mechanism, so raising a
+    budget and re-enqueuing the run resumes it exactly where it stopped.
+    """
+
+    def __init__(self, budgeter: Budgeter) -> None:
+        self._b = budgeter
+
+    async def before_step(self, ctx: RunContext, node: Node) -> None:
+        breach = self._b.would_breach(ctx.scope_for(node.id), 0.0, 0)
+        if breach is not None:
+            await self._act(ctx, node, breach)
+
+    async def after_step(self, ctx: RunContext, node: Node, cost_usd: float,
+                         tokens_in: int, tokens_out: int) -> None:
+        # Commit the step's actual spend. Enforcement happens in the NEXT step's
+        # before_step (which the executor wraps), so a breach halts within one step
+        # boundary of the limit without raising from outside the protected region.
+        scope = ctx.scope_for(node.id)
+        warnings = self._b.commit(scope, cost_usd, tokens_in + tokens_out)
+        for w in warnings:
+            await ctx.emit(EventType.BUDGET_WARNING, node_id=node.id,
+                           data={"scope": w, "kind": "threshold"})
+
+    async def _act(self, ctx: RunContext, node: Node, breach: BudgetExceeded) -> None:
+        if breach.action == BudgetAction.WARN:
+            await ctx.emit(EventType.BUDGET_WARNING, node_id=node.id,
+                           data={"scope": breach.scope, "dimension": breach.dimension})
+            return
+        if breach.action == BudgetAction.PAUSE:
+            await ctx.emit(EventType.BUDGET_EXCEEDED, node_id=node.id,
+                           data={"scope": breach.scope, "dimension": breach.dimension,
+                                 "action": "pause"})
+            await ctx.emit(EventType.RUN_PAUSED)
+            ctx.state.status = "paused"
+            raise GatePaused(f"budget:{breach.scope}")
+        await ctx.emit(EventType.BUDGET_EXCEEDED, node_id=node.id,
+                       data={"scope": breach.scope, "dimension": breach.dimension,
+                             "action": "kill"})
+        raise FatalError(f"budget killed at {breach.scope}.{breach.dimension}")

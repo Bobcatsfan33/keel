@@ -124,6 +124,11 @@ class Executor:
         rec = ctx.state.steps.get(node_id)
         attempt = (rec.attempt + 1) if rec and rec.status == "started" else 1
 
+        # Branch not taken: mark skipped (propagates to its successors via the fold).
+        if (rec is None or rec.status != "started") and ctx.state.should_skip(node_id):
+            await ctx.emit(EventType.STEP_SKIPPED, node_id=node_id)
+            return
+
         # Cross-cutting gate (budget, policy) BEFORE any work is scheduled.
         try:
             for interceptor in self._interceptors:

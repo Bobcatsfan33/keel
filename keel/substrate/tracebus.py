@@ -25,6 +25,7 @@ class TraceBus:
         batch_size: int = 64,
     ) -> None:
         self._store = store
+        self.store = store  # public read-only handle (sub-runs reuse the same backend)
         self._redactor = redactor or Redactor()
         self._otel = otel_exporter
         self._q: asyncio.Queue[Event] = asyncio.Queue(maxsize=buffer_size)
