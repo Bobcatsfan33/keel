@@ -31,7 +31,12 @@ build-backend = "hatchling.build"
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir"]
+files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir", "keel/authoring"]
+
+[[tool.mypy.overrides]]
+# Optional heavy deps (only present with the matching extra installed).
+module = ["asyncpg.*", "nats.*", "fastapi.*", "uvicorn.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
@@ -43,10 +48,25 @@ root_package = "keel"
 [[tool.importlinter.contracts]]
 name = "Layers point downward only"
 type = "layers"
+# KIR is the intermediate-representation *contract* the executor runs, so it sits
+# as a leaf just above the substrate: executor / services / authoring all lower
+# onto it, and it imports nothing from KEEL itself. The DX->KIR *compiler*
+# (kir.compile) is authored against this same contract and reached from L5.
 layers = [
     "keel.authoring",
-    "keel.kir",
     "keel.services",
     "keel.executor",
+    "keel.kir",
     "keel.substrate",
+]
+
+[[tool.importlinter.contracts]]
+name = "Substrate imports nothing from KEEL above it"
+type = "forbidden"
+source_modules = ["keel.substrate"]
+forbidden_modules = [
+    "keel.kir",
+    "keel.executor",
+    "keel.services",
+    "keel.authoring",
 ]

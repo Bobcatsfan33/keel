@@ -1,14 +1,14 @@
 from __future__ import annotations
-from typing import Protocol, AsyncIterator, Optional, runtime_checkable
+from typing import Protocol, AsyncIterator, Optional, Any, runtime_checkable
 from pydantic import BaseModel
 
 
 class ModelRequest(BaseModel):
     model: str
-    messages: list[dict]
+    messages: list[dict[str, str]]
     max_tokens: int
     temperature: float = 0.0
-    response_schema: Optional[dict] = None
+    response_schema: Optional[dict[str, Any]] = None
 
 
 class ModelResponse(BaseModel):

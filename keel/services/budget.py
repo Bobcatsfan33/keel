@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+from ..substrate.ports import Clock
 
 
 class BudgetAction(str, Enum):
@@ -47,7 +48,7 @@ class Budgeter:
     predicate so the executor can decide-then-act atomically; commit() applies a
     spend across all ancestor scopes. There is no spend path that bypasses this."""
 
-    def __init__(self, clock) -> None:
+    def __init__(self, clock: Clock) -> None:
         self._clock = clock
         self._budgets: dict[str, Budget] = {}
         self._meters: dict[str, Meter] = {}

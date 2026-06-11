@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from ..substrate.events import Event, EventType
 from ..kir.schema import Graph
 
@@ -12,7 +12,7 @@ class StepRecord:
     status: str
     attempt: int = 1
     result_ref: Optional[str] = None
-    error: Optional[dict] = None
+    error: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -29,6 +29,9 @@ class RunState:
     next_seq: int = 0
     recorded_ts: list[datetime] = field(default_factory=list)
     recorded_ids: list[str] = field(default_factory=list)
+    gate_decisions: dict[str, str] = field(default_factory=dict)
+    gate_payloads: dict[str, str] = field(default_factory=dict)
+    cancel_requested: bool = False
 
     @classmethod
     def fold(cls, run_id: str, graph: Graph, events: list[Event]) -> "RunState":
@@ -73,6 +76,17 @@ class RunState:
         elif e.type == EventType.STEP_SKIPPED:
             assert e.node_id
             self.steps[e.node_id] = StepRecord(e.node_id, "skipped")
+        elif e.type == EventType.RUN_CANCELLED:
+            self.status = "cancelled"
+            self.cancel_requested = True
+        elif e.type == EventType.GATE_APPROVED:
+            assert e.node_id
+            self.gate_decisions[e.node_id] = "approved"
+            if e.payload_ref:
+                self.gate_payloads[e.node_id] = e.payload_ref
+        elif e.type in (EventType.GATE_REJECTED, EventType.GATE_EXPIRED):
+            assert e.node_id
+            self.gate_decisions[e.node_id] = "rejected"
 
         if e.tokens is not None:
             self.total_tokens_in += e.tokens.input
