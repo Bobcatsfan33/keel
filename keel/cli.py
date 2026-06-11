@@ -253,23 +253,28 @@ async def _test_record(args: argparse.Namespace) -> int:
 
 
 async def cmd_audit(args: argparse.Namespace) -> int:
+    from .services.audit import make_bundle, verify_bundle
+    secret = os.environ.get("KEEL_AUDIT_SECRET")
+    if args.action == "verify":
+        bundle = json.loads(Path(args.run_id).read_text())  # run_id holds the path here
+        ok, detail = verify_bundle(bundle, secret=secret)
+        print(f"audit {'OK' if ok else 'TAMPERED'}: {detail}")
+        return 0 if ok else 1
     if args.action != "export":
-        _die("usage: keel audit export <run_id>")
+        _die("usage: keel audit export <run_id> | keel audit verify <bundle.json>")
     runner = await _runner(args)
     try:
         events = await runner.read_events(args.run_id)
         graph_json = await runner.catalog.get_graph(args.run_id)
     finally:
         await runner.close()
-    bundle = {
-        "run_id": args.run_id,
-        "graph": json.loads(graph_json) if graph_json else None,
-        "events": [json.loads(e.to_json()) for e in events],
-        "note": "tamper-evident hash chain + signature land in P4-6 (audit log).",
-    }
+    bundle = make_bundle(args.run_id, events,
+                         graph=json.loads(graph_json) if graph_json else None,
+                         secret=secret)
     out = Path(args.out or f"audit_{args.run_id}.json")
     out.write_text(json.dumps(bundle, indent=2))
-    print(f"wrote audit bundle -> {out} ({len(events)} events)")
+    signed = " (signed)" if secret else ""
+    print(f"wrote audit bundle -> {out} ({len(events)} events, head={bundle['head'][:12]}){signed}")
     return 0
 
 
@@ -380,9 +385,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_store_args(p_test)
     p_test.set_defaults(func=cmd_test, _async=True)
 
-    p_aud = sub.add_parser("audit", help="export a run bundle")
-    p_aud.add_argument("action", choices=["export"])
-    p_aud.add_argument("run_id")
+    p_aud = sub.add_parser("audit", help="export/verify a tamper-evident run bundle")
+    p_aud.add_argument("action", choices=["export", "verify"])
+    p_aud.add_argument("run_id", help="run id (export) or bundle path (verify)")
     p_aud.add_argument("--out", default=None)
     _add_store_args(p_aud)
     p_aud.set_defaults(func=cmd_audit, _async=True)
