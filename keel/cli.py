@@ -205,8 +205,35 @@ async def cmd_simulate(args: argparse.Namespace) -> int:
 
 
 async def cmd_test(args: argparse.Namespace) -> int:
-    if args.action != "record":
-        _die("usage: keel test record <run_id>")
+    from .services.evals import EvalCase, EvalRunner
+    from .services.evals.junit import to_junit
+    if args.action == "record":
+        return await _test_record(args)
+    if args.action == "run":
+        runner = await _runner(args)
+        cases = []
+        suite = Path(args.suite or ".")
+        files = sorted(suite.glob("*.json")) if suite.is_dir() else [suite]
+        for f in files:
+            try:
+                cases.append(EvalCase.model_validate_json(f.read_text()))
+            except Exception:  # noqa: BLE001 — skip non-case json
+                continue
+        if not cases:
+            _die(f"no eval cases found in {suite}")
+        er = EvalRunner(runner.store, runner.blobs)
+        report = await er.run_suite(cases, n_flake=args.flake)
+        await runner.close()
+        if args.junit:
+            Path(args.junit).write_text(to_junit(report))
+            print(f"wrote JUnit -> {args.junit}")
+        print(f"eval: {report['passed']}/{report['total']} passed, "
+              f"{report['failed']} failed, flaky={report['flaky']}")
+        return 0 if report["failed"] == 0 else 1
+    _die("usage: keel test record <run_id> | keel test run --suite <dir>")
+
+
+async def _test_record(args: argparse.Namespace) -> int:
     runner = await _runner(args)
     try:
         state = await runner.load_state(args.run_id)
@@ -226,23 +253,44 @@ async def cmd_test(args: argparse.Namespace) -> int:
 
 
 async def cmd_audit(args: argparse.Namespace) -> int:
+    from .services.audit import make_bundle, verify_bundle
+    secret = os.environ.get("KEEL_AUDIT_SECRET")
+    if args.action == "verify":
+        bundle = json.loads(Path(args.run_id).read_text())  # run_id holds the path here
+        ok, detail = verify_bundle(bundle, secret=secret)
+        print(f"audit {'OK' if ok else 'TAMPERED'}: {detail}")
+        return 0 if ok else 1
     if args.action != "export":
-        _die("usage: keel audit export <run_id>")
+        _die("usage: keel audit export <run_id> | keel audit verify <bundle.json>")
     runner = await _runner(args)
     try:
         events = await runner.read_events(args.run_id)
         graph_json = await runner.catalog.get_graph(args.run_id)
     finally:
         await runner.close()
-    bundle = {
-        "run_id": args.run_id,
-        "graph": json.loads(graph_json) if graph_json else None,
-        "events": [json.loads(e.to_json()) for e in events],
-        "note": "tamper-evident hash chain + signature land in P4-6 (audit log).",
-    }
+    bundle = make_bundle(args.run_id, events,
+                         graph=json.loads(graph_json) if graph_json else None,
+                         secret=secret)
     out = Path(args.out or f"audit_{args.run_id}.json")
     out.write_text(json.dumps(bundle, indent=2))
-    print(f"wrote audit bundle -> {out} ({len(events)} events)")
+    signed = " (signed)" if secret else ""
+    print(f"wrote audit bundle -> {out} ({len(events)} events, head={bundle['head'][:12]}){signed}")
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    if args.framework != "crewai":
+        _die("only 'crewai' import is supported")
+    from .authoring.import_crewai import load_crewai_dir, load_yaml_pair, unconverted
+    crew = load_crewai_dir(args.path, graph_id=args.graph_id)
+    graph = crew.compile()
+    agents, tasks = load_yaml_pair(args.path)
+    notes = unconverted(agents, tasks)
+    out = Path(args.out or f"{graph.graph_id}.kir.json")
+    out.write_text(graph.model_dump_json(indent=2))
+    print(f"imported {len(graph.nodes)} nodes -> {out}")
+    for n in notes:
+        print(f"  [unconverted] {n}", file=sys.stderr)
     return 0
 
 
@@ -344,18 +392,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_sim.set_defaults(func=cmd_simulate, _async=True)
 
     p_test = sub.add_parser("test", help="eval-case tooling")
-    p_test.add_argument("action", choices=["record"])
-    p_test.add_argument("run_id")
+    p_test.add_argument("action", choices=["record", "run"])
+    p_test.add_argument("run_id", nargs="?", default=None)
     p_test.add_argument("--out", default=None)
+    p_test.add_argument("--suite", default=None, help="dir of eval case .json files")
+    p_test.add_argument("--junit", default=None, help="write JUnit XML to this path")
+    p_test.add_argument("--flake", type=int, default=3, help="runs per case (flake detection)")
     _add_store_args(p_test)
     p_test.set_defaults(func=cmd_test, _async=True)
 
-    p_aud = sub.add_parser("audit", help="export a run bundle")
-    p_aud.add_argument("action", choices=["export"])
-    p_aud.add_argument("run_id")
+    p_aud = sub.add_parser("audit", help="export/verify a tamper-evident run bundle")
+    p_aud.add_argument("action", choices=["export", "verify"])
+    p_aud.add_argument("run_id", help="run id (export) or bundle path (verify)")
     p_aud.add_argument("--out", default=None)
     _add_store_args(p_aud)
     p_aud.set_defaults(func=cmd_audit, _async=True)
+
+    p_imp = sub.add_parser("import", help="import another framework's project to KIR")
+    p_imp.add_argument("framework", choices=["crewai"])
+    p_imp.add_argument("path", help="dir with agents.yaml + tasks.yaml")
+    p_imp.add_argument("--graph-id", dest="graph_id", default=None)
+    p_imp.add_argument("--out", default=None)
+    p_imp.set_defaults(func=cmd_import, _async=False)
 
     p_view = sub.add_parser("view", help="launch the trace viewer")
     p_view.add_argument("--host", default="127.0.0.1")

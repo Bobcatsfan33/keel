@@ -21,6 +21,9 @@ class ToolContract(BaseModel):
     name: str
     input_schema: str               # ref:schemas/...
     output_schema: str              # ref:schemas/...
+    # "pkg.module:function" — when set with a sandbox configured, the tool runs
+    # out-of-process under capability gating instead of as an in-process callable.
+    module: Optional[str] = None
     side_effect: SideEffect = SideEffect.READ
     idempotent: bool = True
     rate_limit_per_min: int = 60
