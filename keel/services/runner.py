@@ -90,6 +90,14 @@ class Runner:
                           state.total_tokens_in + state.total_tokens_out, completed)
         return [BudgetInterceptor(budgeter)]
 
+    async def register(self, graph: Graph, *, run_id: Optional[str] = None) -> str:
+        """Record a run's graph in the catalog without executing it, so a worker can
+        later pick it up by id (``resume`` recovers the graph). Returns the run id."""
+        rid = run_id or self.ids.new()
+        await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
+                                      self.clock.now().isoformat())
+        return rid
+
     async def run(self, graph: Graph, *, run_id: Optional[str] = None) -> RunState:
         rid = run_id or self.ids.new()
         await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
