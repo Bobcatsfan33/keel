@@ -24,6 +24,9 @@ class EventType(str, Enum):
     TOOL_REQUEST = "tool.request"
     TOOL_RESPONSE = "tool.response"
     TOOL_DENIED = "tool.denied"
+    # memory subsystem (additive since the Phase-1 freeze; see ADR-0007)
+    MEMORY_READ = "memory.read"
+    MEMORY_WRITE = "memory.write"
     ROUTE_DECIDED = "route.decided"
     BUDGET_WARNING = "budget.warning"
     BUDGET_EXCEEDED = "budget.exceeded"
