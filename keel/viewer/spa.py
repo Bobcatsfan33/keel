@@ -113,9 +113,38 @@ async function openRun(id) {
       <span class="pill">tokens ${r.total_tokens_in}→${r.total_tokens_out}</span>
       <span class="pill">${r.events.length} events</span>
       <span class="pill">priciest: ${exp}</span>
+      <button onclick="diffWith()">Diff vs…</button>
     </div>
+    ${gatePanel(r)}
     <table><thead><tr><th>#</th><th>type</th><th>node</th><th>tok</th><th>cost</th><th>data</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
+}
+
+function openGates(r) {
+  const decided = new Set();
+  for (const e of r.events)
+    if (e.type==='gate.approved'||e.type==='gate.rejected'||e.type==='gate.expired') decided.add(e.node_id);
+  return r.events.filter(e => e.type==='gate.opened' && !decided.has(e.node_id)).map(e => e.node_id);
+}
+function gatePanel(r) {
+  const gates = openGates(r);
+  if (!gates.length) return '';
+  return gates.map(n => `<div class="bar"><span class="pill status-paused">gate: ${n}</span>
+    <button onclick="decideGate('${n}','approve')">Approve</button>
+    <button onclick="decideGate('${n}','reject')">Reject</button></div>`).join('');
+}
+async function decideGate(node, decision) {
+  await fetch(`/api/runs/${current}/gates/${node}/${decision}`, {method:'POST'});
+  $('#hint').textContent = `${decision}d ${node} — resumes on next worker / keel resume`;
+  openRun(current);
+}
+async function diffWith() {
+  const other = prompt('Diff current run against run id:');
+  if (!other) return;
+  const res = await (await fetch(`/api/diff/${current}/${other}`)).json();
+  $('#dtitle').textContent = `diff ${current} vs ${other}`;
+  $('#dbody').textContent = res.lines.join('\n');
+  $('#drawer').classList.add('open');
 }
 
 function fmtData(e) {

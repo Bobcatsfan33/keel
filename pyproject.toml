@@ -18,6 +18,7 @@ dependencies = [
 pg = ["asyncpg>=0.29"]
 nats = ["nats-py>=2.6"]
 viewer = ["fastapi>=0.110", "uvicorn>=0.29"]
+otel = ["opentelemetry-api>=1.20", "opentelemetry-sdk>=1.20"]
 sandbox = []
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "hypothesis>=6", "mypy>=1.9", "ruff>=0.4", "import-linter>=2"]
 
@@ -35,7 +36,7 @@ files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir", "keel/a
 
 [[tool.mypy.overrides]]
 # Optional heavy deps (only present with the matching extra installed).
-module = ["asyncpg.*", "nats.*", "fastapi.*", "uvicorn.*"]
+module = ["asyncpg.*", "nats.*", "fastapi.*", "uvicorn.*", "opentelemetry.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

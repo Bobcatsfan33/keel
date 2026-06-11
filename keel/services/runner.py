@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from typing import Optional, Any
 from ..substrate.ports import (Clock, IdGen, Rng, BlobStore, SystemClock, UlidIdGen,
                                SeededRng, FileBlobStore, MemoryBlobStore)
-from ..substrate.tracebus import TraceBus, OTelExporter
+from ..substrate.tracebus import TraceBus, OTelExporter, EventListener
 from ..substrate.redact import Redactor
-from ..substrate.events import Event, EventType
+from ..substrate.events import Event
 from ..substrate.store.base import EventStore
 from ..substrate.store.sqlite import SqliteEventStore
 from ..substrate.store.memory import MemoryEventStore
@@ -26,6 +26,8 @@ from .model.router import Router
 from .model.handlers import Completer
 from .tools.gateway import ToolGateway
 from .nodes import default_handlers
+from .gate_service import GateService
+from .scheduler import Scheduler
 
 
 @dataclass
@@ -40,6 +42,7 @@ class Runner:
     budget: Budget
     redactor: Redactor
     otel: Optional[OTelExporter] = None
+    listeners: Optional[list[EventListener]] = None
     _owns: bool = True
 
     @classmethod
@@ -56,6 +59,7 @@ class Runner:
         budget: Optional[Budget] = None,
         redactor: Optional[Redactor] = None,
         otel: Optional[OTelExporter] = None,
+        listeners: Optional[list[EventListener]] = None,
         price_table: Any = None,
         seed: int = 0,
     ) -> "Runner":
@@ -74,10 +78,10 @@ class Runner:
         return cls(store=store, catalog=catalog, blobs=blobs, handlers=handlers,
                    clock=SystemClock(), ids=UlidIdGen(), rng=SeededRng(seed),
                    budget=budget or Budget.default(), redactor=redactor or Redactor(),
-                   otel=otel)
+                   otel=otel, listeners=listeners)
 
     def _new_bus(self) -> TraceBus:
-        return TraceBus(self.store, self.redactor, self.otel)
+        return TraceBus(self.store, self.redactor, self.otel, listeners=self.listeners)
 
     def _budget_interceptors(self, scope: str, state: Optional[RunState] = None
                              ) -> list[StepInterceptor]:
@@ -89,6 +93,14 @@ class Runner:
             budgeter.seed(scope, state.total_cost_usd,
                           state.total_tokens_in + state.total_tokens_out, completed)
         return [BudgetInterceptor(budgeter)]
+
+    async def register(self, graph: Graph, *, run_id: Optional[str] = None) -> str:
+        """Record a run's graph in the catalog without executing it, so a worker can
+        later pick it up by id (``resume`` recovers the graph). Returns the run id."""
+        rid = run_id or self.ids.new()
+        await self.catalog.record_run(rid, graph.graph_id, graph.model_dump_json(),
+                                      self.clock.now().isoformat())
+        return rid
 
     async def run(self, graph: Graph, *, run_id: Optional[str] = None) -> RunState:
         rid = run_id or self.ids.new()
@@ -141,22 +153,17 @@ class Runner:
     async def read_events(self, run_id: str) -> list[Event]:
         return [e async for e in self.store.read_run(run_id)]
 
-    async def _append_gate(self, run_id: str, node_id: str, etype: EventType,
-                           payload: Optional[bytes]) -> None:
-        state = await self.load_state(run_id)
-        ref = self.blobs.put(payload) if payload is not None else None
-        ev = Event(event_id=self.ids.new(), run_id=run_id, seq=state.next_seq,
-                   ts=self.clock.now(), type=etype, node_id=node_id, payload_ref=ref)
-        await self.store.append_batch([ev])
+    def gate_service(self, scheduler: Optional[Scheduler] = None) -> GateService:
+        return GateService(self.store, self.ids, self.clock, self.blobs, scheduler)
 
     async def approve_gate(self, run_id: str, node_id: str,
                            payload: Optional[bytes] = None) -> None:
         """Append a GATE_APPROVED decision. Resuming the run then completes the gate
         from any worker — it needs neither the original process nor machine."""
-        await self._append_gate(run_id, node_id, EventType.GATE_APPROVED, payload)
+        await self.gate_service().approve(run_id, node_id, payload)
 
     async def reject_gate(self, run_id: str, node_id: str) -> None:
-        await self._append_gate(run_id, node_id, EventType.GATE_REJECTED, None)
+        await self.gate_service().reject(run_id, node_id)
 
     async def list_runs(self, limit: int = 100) -> list[RunInfo]:
         return await self.catalog.list_runs(limit)
