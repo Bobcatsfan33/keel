@@ -60,3 +60,43 @@ class MemoryLeaseManager:
         if cur is None or cur[1] <= self._clock.monotonic():
             return None
         return cur[0]
+
+
+class PostgresLeaseManager:
+    """Cooperative leasing for a multi-node cluster via a ``leases`` row whose
+    ``expires_at`` is stolen once stale. Combined with the event store's
+    ``(run_id, seq)`` primary key, a brief double-lease during a partition cannot
+    corrupt the log — the loser's append collides on seq and is rejected. Requires
+    keel[pg]; ``pool`` is an asyncpg pool."""
+
+    def __init__(self, pool: object, clock: Clock, ttl_s: float = DEFAULT_TTL_S) -> None:
+        self._pool = pool
+        self._clock = clock
+        self._ttl = ttl_s
+
+    async def acquire(self, run_id: str, worker_id: str) -> bool:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(seconds=self._ttl)
+        async with self._pool.acquire() as con:  # type: ignore[attr-defined]
+            row = await con.fetchrow(
+                """INSERT INTO leases(run_id, worker_id, expires_at) VALUES ($1,$2,$3)
+                   ON CONFLICT (run_id) DO UPDATE SET worker_id=$2, expires_at=$3
+                     WHERE leases.expires_at < $4 OR leases.worker_id = $2
+                   RETURNING worker_id""",
+                run_id, worker_id, expires, now)
+        return bool(row is not None and row["worker_id"] == worker_id)
+
+    async def heartbeat(self, run_id: str, worker_id: str) -> bool:
+        from datetime import datetime, timezone, timedelta
+        expires = datetime.now(timezone.utc) + timedelta(seconds=self._ttl)
+        async with self._pool.acquire() as con:  # type: ignore[attr-defined]
+            result = await con.execute(
+                "UPDATE leases SET expires_at=$1 WHERE run_id=$2 AND worker_id=$3",
+                expires, run_id, worker_id)
+        return bool(result.endswith("1"))
+
+    async def release(self, run_id: str, worker_id: str) -> None:
+        async with self._pool.acquire() as con:  # type: ignore[attr-defined]
+            await con.execute(
+                "DELETE FROM leases WHERE run_id=$1 AND worker_id=$2", run_id, worker_id)
