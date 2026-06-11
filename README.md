@@ -1,5 +1,13 @@
 # KEEL — Production-First Agent Runtime
 
+[![CI](https://github.com/Bobcatsfan33/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/Bobcatsfan33/keel/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![Typed: mypy --strict](https://img.shields.io/badge/mypy-strict-blue.svg)](https://mypy-lang.org/)
+[![Lint: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Layers: import-linter](https://img.shields.io/badge/layers-import--linter-blueviolet.svg)](https://import-linter.readthedocs.io/)
+[![Status: phases 1–4 code-complete](https://img.shields.io/badge/roadmap-phases%201--4%20complete-success.svg)](docs/ROADMAP.md)
+
 > The keel is the part of the ship nobody sees that keeps it upright.
 > Competitors sell sails; we sell the keel.
 
@@ -50,6 +58,10 @@ keel ls                                  # list runs
 keel show <run_id>                       # the full event timeline (the trace)
 keel view                                # browse runs/steps/prompts/tokens/dollars
 ```
+
+**→ New here? Follow the [10-minute quickstart walkthrough](docs/QUICKSTART.md)** —
+author a crew, pause at a human gate, resume in a fresh process, budget it, replay it
+byte-identically, and turn the run into a regression test.
 
 ### Author a crew (CrewAI-comparable ergonomics)
 
