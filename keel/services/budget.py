@@ -60,6 +60,13 @@ class Budgeter:
         self._budgets[scope] = budget
         self._meters[scope] = Meter(started_monotonic=self._clock.monotonic())
 
+    def seed(self, scope: str, usd: float, tokens: int, steps: int) -> None:
+        """Pre-load a scope's meter with spend already committed before this process
+        (used on resume so budgets remain honest across a crash/restart)."""
+        m = self._meters.get(scope)
+        if m is not None:
+            m.usd, m.tokens, m.steps = usd, tokens, steps
+
     def _scopes_for(self, node_scope: str) -> list[str]:
         parts = node_scope.split("/")
         return ["/".join(parts[: i + 1]) for i in range(len(parts))]

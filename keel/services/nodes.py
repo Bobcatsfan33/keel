@@ -165,6 +165,12 @@ def _collect_region_output(final: RunState, ctx: RunContext) -> bytes:
 # --------------------------------------------------------------------------- #
 # completer adapters + assembler
 # --------------------------------------------------------------------------- #
+async def _no_model_handler(ctx: RunContext, node: Node, inputs: dict[str, bytes]) -> bytes:
+    raise FatalError(
+        f"llm_step '{node.id}' has no model configured; open the runtime with a "
+        "model=, completer=, or router=")
+
+
 def router_completer(router: Router, required_caps: frozenset[str] = frozenset()) -> Completer:
     async def _complete(ctx: RunContext, node: Node, req: ModelRequest) -> ModelResponse:
         return await router.complete(ctx, node, req, required_caps)
@@ -181,17 +187,19 @@ def default_handlers(
 ) -> dict[NodeType, NodeHandler]:
     """Assemble the full node-type handler table the executor runs against. Exactly
     one of model / completer / router supplies LLM completions."""
-    if router is not None:
-        llm_src: ModelPort | Completer = router_completer(router)
-    elif completer is not None:
-        llm_src = completer
-    elif model is not None:
-        llm_src = model
-    else:
-        raise ValueError("default_handlers needs one of model=, completer=, router=")
-
     handlers: dict[NodeType, NodeHandler] = {}
-    handlers[NodeType.LLM_STEP] = make_llm_handler(llm_src, price_table=price_table)
+    if router is not None:
+        handlers[NodeType.LLM_STEP] = make_llm_handler(router_completer(router),
+                                                       price_table=price_table)
+    elif completer is not None:
+        handlers[NodeType.LLM_STEP] = make_llm_handler(completer, price_table=price_table)
+    elif model is not None:
+        handlers[NodeType.LLM_STEP] = make_llm_handler(model, price_table=price_table)
+    else:
+        # No model wired (e.g. a read-only runner for ls/show/diff). Installing a
+        # handler that fails loudly *only if an llm_step is actually executed* keeps
+        # runner construction cheap without silently degrading a real run.
+        handlers[NodeType.LLM_STEP] = _no_model_handler
     handlers[NodeType.HUMAN_GATE] = human_gate_handler
     handlers[NodeType.ROUTER] = make_router_handler()
     handlers[NodeType.MAP] = make_map_handler()

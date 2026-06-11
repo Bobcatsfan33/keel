@@ -31,7 +31,7 @@ build-backend = "hatchling.build"
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir", "keel/authoring"]
+files = ["keel/substrate", "keel/executor", "keel/services", "keel/kir", "keel/authoring", "keel/cli.py", "keel/viewer"]
 
 [[tool.mypy.overrides]]
 # Optional heavy deps (only present with the matching extra installed).

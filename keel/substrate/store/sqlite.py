@@ -24,10 +24,18 @@ class SqliteEventStore:
         self._path = path
         self._db: aiosqlite.Connection | None = None
 
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        assert self._db is not None, "store not opened"
+        return self._db
+
     async def open(self) -> "SqliteEventStore":
         self._db = await aiosqlite.connect(self._path)
-        await self._db.executescript(_SCHEMA)
+        # WAL + a busy timeout so a concurrent reader (the viewer) never spuriously
+        # fails against the writer.
         await self._db.execute("PRAGMA journal_mode=WAL;")
+        await self._db.execute("PRAGMA busy_timeout=5000;")
+        await self._db.executescript(_SCHEMA)
         await self._db.commit()
         return self
 
