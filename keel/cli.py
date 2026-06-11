@@ -152,19 +152,27 @@ async def cmd_approve(args: argparse.Namespace) -> int:
 
 
 async def cmd_replay(args: argparse.Namespace) -> int:
-    from .executor.replay import verify_recorded_replay
-    runner = await _runner(args)
+    from .services.replay import replay_recorded, replay_patched
+    runner = await _runner(args, _build_model(args) if args.from_step else None)
     try:
         graph_json = await runner.catalog.get_graph(args.run_id)
         if graph_json is None:
             _die(f"unknown run '{args.run_id}'")
         graph = Graph.model_validate_json(graph_json)
         events = await runner.read_events(args.run_id)
+        if args.from_step:
+            patch = json.loads(args.patch) if args.patch else None
+            final = await replay_patched(graph, args.run_id, events, runner.blobs,
+                                         from_step=args.from_step, patch=patch,
+                                         model=_build_model(args))
+            _print_summary(f"{args.run_id}:replay", final)
+            return 0 if final.status == "completed" else 1
+        result = await replay_recorded(graph, args.run_id, events, runner.blobs)
     finally:
         await runner.close()
-    ok, detail = verify_recorded_replay(graph, args.run_id, events)
-    print(f"replay {'OK (byte-identical)' if ok else 'DIVERGED'}: {detail}")
-    return 0 if ok else 1
+    print(f"replay {'OK (byte-identical)' if result.identical else 'DIVERGED'}: "
+          f"{result.detail}")
+    return 0 if result.identical else 1
 
 
 async def cmd_diff(args: argparse.Namespace) -> int:
@@ -316,8 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_store_args(p_app)
     p_app.set_defaults(func=cmd_approve, _async=True)
 
-    p_rep = sub.add_parser("replay", help="byte-identical recorded replay check")
+    p_rep = sub.add_parser("replay", help="recorded byte-identical or patched replay")
     p_rep.add_argument("run_id")
+    p_rep.add_argument("--from", dest="from_step", default=None,
+                       help="patched replay: re-run from this node live")
+    p_rep.add_argument("--patch", default=None, help="JSON to splice as --from's output")
+    p_rep.add_argument("--model", default=os.environ.get("KEEL_MODEL"))
+    p_rep.add_argument("--mock", action="store_true")
+    p_rep.add_argument("--quiet", action="store_true")
     _add_store_args(p_rep)
     p_rep.set_defaults(func=cmd_replay, _async=True)
 
