@@ -25,7 +25,7 @@ from typing import Any, Optional, NoReturn
 from .kir.schema import Graph
 from .services.runner import Runner
 from .services.model.handlers import MockModelPort
-from .services.model.pricing import PriceTable, estimate_cost
+from .services.model.pricing import PriceTable
 
 
 # --------------------------------------------------------------------------- #
@@ -189,20 +189,16 @@ async def cmd_diff(args: argparse.Namespace) -> int:
 
 
 async def cmd_simulate(args: argparse.Namespace) -> int:
+    from .services.simulate import simulate_run
     graph = _load_graph(args.file)
     table = PriceTable()
-    total = 0.0
-    tin = int(args.assume_input_tokens)
-    tout = int(args.assume_output_tokens)
-    print(f"cost simulation for {graph.graph_id} "
-          f"(assuming {tin} in / {tout} out per llm step):")
-    for n in graph.nodes:
-        if n.type.value in ("llm_step", "router"):
-            model = str(n.config.get("model", "anthropic:claude-haiku-4-5"))
-            c = estimate_cost(model, tin, tout, table) if n.type.value == "llm_step" else 0.0
-            total += c
-            print(f"  {n.id:<28} {model:<28} ${c:.5f}")
-    print(f"  estimated total: ${total:.5f}")
+    result = simulate_run(graph, price_table=table,
+                          default_output_tokens=int(args.assume_output_tokens))
+    print(f"cost simulation for {graph.graph_id}:")
+    for n in result.nodes:
+        print(f"  {n.node_id:<28} {n.model:<28} "
+              f"{n.input_tokens}->{n.output_tokens} tok  ${n.usd:.5f}")
+    print(f"  estimated total: ${result.total_usd:.5f}  ({result.total_tokens} tokens)")
     if table.unknown:
         print(f"  (unpriced models, counted as $0: {', '.join(sorted(table.unknown))})")
     return 0
