@@ -1,0 +1,12 @@
+# .github/workflows/security.yml — this repo's caller of the shared workflow
+name: security
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+jobs:
+  suite:
+    uses: Bobcatsfan33/.github/.github/workflows/security-reusable.yml@main
+    with:
+      image: ghcr.io/bobcatsfan33/keel
+      languages: '["python"]'
+      dockerfile: Dockerfile
