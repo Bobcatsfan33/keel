@@ -35,7 +35,9 @@ class HashEmbedder:
         vec = [0.0] * self.dim
         toks = text.lower().split()
         for tok in toks:
-            h = int(hashlib.sha1(tok.encode()).hexdigest(), 16)
+            # Non-cryptographic: SHA-1 is used only to bucket tokens into vector
+            # dimensions, never for security. usedforsecurity=False documents that.
+            h = int(hashlib.sha1(tok.encode(), usedforsecurity=False).hexdigest(), 16)
             vec[h % self.dim] += 1.0
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
