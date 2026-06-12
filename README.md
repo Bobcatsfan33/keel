@@ -94,7 +94,22 @@ Completed model calls are replayed from the log and **never re-billed**.
 
 ## CLI
 
-`keel run | ls | show | resume | approve | replay | diff | simulate | test | audit | view`
+`keel run | ls | show | resume | approve | replay | diff | simulate | test | audit | import | view`
+
+## Container
+
+A first-party **distroless, non-root** image (runner + viewer) ships from this repo,
+signed and SBOM-attested via the org security workflow:
+
+```bash
+docker build -t keel:local .                       # ~140 MB, runs as UID 65532
+docker run --rm keel:local run examples/research_pipeline.py --mock
+docker run --rm -p 8321:8321 keel:local            # viewer on :8321 (default CMD)
+```
+
+Run state goes to the `/data` volume (`KEEL_DATA_DIR`); mount a host path or volume to
+persist it. Published images are at `ghcr.io/bobcatsfan33/keel` — verify the signature
+with `cosign verify --certificate-identity-regexp 'github.com/Bobcatsfan33' …`.
 
 ## Status
 
