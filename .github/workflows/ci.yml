@@ -20,3 +20,26 @@ jobs:
         run: python -m tests.chaos.bench_overhead
       - name: viewer render benchmark (10k events < 2s)
         run: python -m tests.chaos.bench_viewer
+
+  # K-1 — security + supply-chain. Existing quality jobs above stay untouched.
+  security:
+    runs-on: ubuntu-latest
+    permissions: { security-events: write, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -e ".[dev]" pip-audit bandit cyclonedx-bom
+      - name: pip-audit
+        run: pip-audit --skip-editable --progress-spinner off
+      - name: bandit (SAST, fail on medium+)
+        run: bandit -r keel -ll
+      - name: SBOM
+        run: |
+          cyclonedx-py environment --output-format JSON \
+            --output-file keel-sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with: { name: sbom, path: keel-sbom.cdx.json, retention-days: 90 }
+      - uses: github/codeql-action/init@v4
+        with: { languages: python, queries: security-extended }
+      - uses: github/codeql-action/analyze@v4
