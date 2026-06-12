@@ -1,6 +1,6 @@
 [project]
 name = "keel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Production-first agent runtime: durable, fully-traced, budget-governed execution for AI agents."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -319,9 +319,25 @@ def _die(msg: str) -> NoReturn:
     raise SystemExit(2)
 
 
+def _default_db() -> str:
+    if "KEEL_DB" in os.environ:
+        return os.environ["KEEL_DB"]
+    data = os.environ.get("KEEL_DATA_DIR")
+    return f"{data.rstrip('/')}/keel.db" if data else "keel.db"
+
+
+def _default_blobs() -> str:
+    if "KEEL_BLOBS" in os.environ:
+        return os.environ["KEEL_BLOBS"]
+    data = os.environ.get("KEEL_DATA_DIR")
+    return f"{data.rstrip('/')}/blobs" if data else "blobs"
+
+
 def _add_store_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--db", default=os.environ.get("KEEL_DB", "keel.db"))
-    p.add_argument("--blobs", default=os.environ.get("KEEL_BLOBS", "blobs"))
+    # KEEL_DB / KEEL_BLOBS win; otherwise derive from KEEL_DATA_DIR (the container's
+    # /data volume); otherwise default to the CWD.
+    p.add_argument("--db", default=_default_db())
+    p.add_argument("--blobs", default=_default_blobs())
 
 
 def build_parser() -> argparse.ArgumentParser:
