@@ -11,14 +11,21 @@
 > The keel is the part of the ship nobody sees that keeps it upright.
 > Competitors sell sails; we sell the keel.
 
-KEEL is the **runtime layer for AI agents**. Every other agent framework
-(CrewAI, LangGraph, AutoGen) competes on *how agents think* — authoring
-ergonomics. Their shared, documented failure mode is *how agents run*: no native
-observability, no durable state, no cost controls, no testing story, brittle
-integrations, no governance. KEEL builds the runtime first and the authoring
+KEEL is a **runtime layer for AI agents**. Most agent frameworks
+(CrewAI, LangGraph, AutoGen) compete on *how agents think* — authoring
+ergonomics. A commonly cited weak spot across the ecosystem is *how agents run*:
+observability, durable state, cost controls, a testing story, integration
+robustness, and governance. KEEL builds the runtime first and the authoring
 ergonomics on top of it.
 
-## Five invariants — enforced, not aspirational
+> **Project status.** Early-stage, single-maintainer project. The runtime is
+> functional and every PR is CI-gated, but it has **not** had an independent
+> security audit or penetration test, a live multi-node soak test, or any
+> production deployments. Treat it as pre-GA and evaluate accordingly.
+
+## Five design invariants
+
+These are enforced in code and CI rather than left to convention:
 
 1. **Nothing is invisible.** Every model call, tool call, state mutation, and
    routing decision emits a structured trace event. No code path runs silently.
@@ -63,7 +70,7 @@ keel view                                # browse runs/steps/prompts/tokens/doll
 author a crew, pause at a human gate, resume in a fresh process, budget it, replay it
 byte-identically, and turn the run into a regression test.
 
-### Author a crew (CrewAI-comparable ergonomics)
+### Author a crew (CrewAI-style ergonomics)
 
 ```python
 from keel.authoring import Agent, Task, Crew
@@ -113,8 +120,10 @@ with `cosign verify --certificate-identity-regexp 'github.com/Bobcatsfan33' …`
 
 ## Status
 
-Built in four ~3-month phases. **All four phases are code-complete** (GA remaining
-items are operational: third-party pentest, live multi-node soak, partner migrations):
+Organized into four development phases, all **code-complete**. As noted above, this
+is an early-stage, single-maintainer project that has not yet been independently
+audited, soak-tested across nodes, or run in production. Remaining items toward GA
+are operational (third-party pentest, live multi-node soak, partner migrations):
 
 - **Phase 1** — Core Runtime + Authoring ([`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md))
 - **Phase 2** — Durability + Observability ([`docs/PHASE2_STATUS.md`](docs/PHASE2_STATUS.md)):
